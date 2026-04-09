@@ -1,0 +1,101 @@
+# =============================================================================
+# Configuración por defecto - Flight Delay Propagation
+# =============================================================================
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  years: [2018]                  # Empezar con un año durante desarrollo
+  sample_frac: 0.1               # Fracción de datos para desarrollo rápido
+  random_seed: 42
+  # Columnas relevantes del dataset de Kaggle
+  columns:
+    - FlightDate
+    - Airline
+    - Origin
+    - Dest
+    - CRSDepTime
+    - DepDelay
+    - ArrDelay
+    - Distance
+    - Cancelled
+    - Diverted
+    - AirTime
+    - CarrierDelay
+    - WeatherDelay
+    - NASDelay
+    - SecurityDelay
+    - LateAircraftDelay
+
+features:
+  target: ArrDelay
+  temporal:
+    - month
+    - day_of_week
+    - hour
+  categorical:
+    - Airline
+    - Origin
+    - Dest
+  numerical:
+    - Distance
+    - DepDelay
+    - AirTime
+
+split:
+  method: temporal               # Separación temporal (no aleatoria)
+  train_months: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  val_months: [10, 11]
+  test_months: [12]
+
+graph:
+  top_n_airports: 30             # Filtrar a los N aeropuertos con más tráfico
+  min_route_flights: 50          # Mínimo de vuelos para crear una arista
+  temporal_window_hours: 1       # Resolución temporal de los snapshots
+  input_window: 6                # Horas de historia como input
+  prediction_horizons: [1, 2, 3, 4, 5]  # Horas futuras a predecir
+
+model:
+  name: dense_nn                 # dense_nn | lstm | basic_gcn | multi_horizon_gat | spatiotemporal_gnn
+  dense_nn:
+    hidden_dims: [256, 128, 64]
+    dropout: 0.3
+    activation: relu
+  lstm:
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.3
+    sequence_length: 12
+  basic_gcn:
+    hidden_channels: 64
+    num_layers: 3
+    dropout: 0.3
+  multi_horizon_gat:
+    hidden_channels: 64
+    num_heads: 4
+    num_layers: 3
+    dropout: 0.3
+  spatiotemporal_gnn:
+    gnn_hidden: 64
+    lstm_hidden: 128
+    num_heads: 4
+    num_gnn_layers: 2
+    dropout: 0.3
+
+training:
+  epochs: 100
+  batch_size: 512
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler: cosine              # cosine | step | plateau
+  patience: 15                   # Early stopping
+  gradient_clip: 1.0
+  num_workers: 4
+
+evaluation:
+  metrics: [mae, rmse, mape, r2]
+  delay_threshold_minutes: 15    # Umbral para clasificación binaria
+
+reproducibility:
+  seed: 42
+  deterministic: true
