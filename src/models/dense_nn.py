@@ -63,4 +63,9 @@ class DenseNN(nn.Module):
         Returns:
             Predicciones [batch_size, 1].
         """
+        if x.size(0) == 1 and self.training:
+            self.eval()
+            out = self.network(x)
+            self.train()
+            return out
         return self.network(x)

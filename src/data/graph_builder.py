@@ -80,7 +80,7 @@ def build_edge_index(
 
     # Normalizar pesos al rango [0, 1]
     weights_tensor = torch.tensor(weights, dtype=torch.float32)
-    if weights_tensor.max() > 0:
+    if weights_tensor.numel() > 0 and weights_tensor.max() > 0:
         weights_tensor = weights_tensor / weights_tensor.max()
 
     logger.info(
