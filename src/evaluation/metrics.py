@@ -1,11 +1,12 @@
 """Métricas de evaluación para modelos de predicción de retrasos.
 
-Proporciona funciones para calcular MAE, RMSE, MAPE y R², tanto
-para predicciones simples como multi-horizonte.
+Proporciona funciones para calcular MAE, RMSE, MAPE y R² (regresión),
+así como accuracy, precision, recall y F1 (clasificación binaria).
 """
 
 import numpy as np
 import torch
+from torch_geometric.data import Data
 
 
 def compute_mae(predictions: np.ndarray, targets: np.ndarray) -> float:
@@ -92,6 +93,83 @@ def compute_all_metrics(
         "mape": compute_mape(predictions, targets),
         "r2": compute_r2(predictions, targets),
     }
+
+
+def compute_classification_metrics(
+    predictions: np.ndarray, targets: np.ndarray, threshold: float = 0.5
+) -> dict[str, float]:
+    """Calcula métricas de clasificación binaria.
+
+    Args:
+        predictions: Probabilidades predichas (después de sigmoid).
+        targets: Valores reales binarios (0 o 1).
+        threshold: Umbral para convertir probabilidades a clases.
+
+    Returns:
+        Diccionario con accuracy, precision, recall, f1.
+    """
+    pred_labels = (predictions >= threshold).astype(int)
+    target_labels = targets.astype(int)
+
+    tp = np.sum((pred_labels == 1) & (target_labels == 1))
+    fp = np.sum((pred_labels == 1) & (target_labels == 0))
+    fn = np.sum((pred_labels == 0) & (target_labels == 1))
+    tn = np.sum((pred_labels == 0) & (target_labels == 0))
+
+    accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+
+    return {
+        "accuracy": float(accuracy),
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1": float(f1),
+    }
+
+
+@torch.no_grad()
+def evaluate_graph_model(
+    model: torch.nn.Module,
+    graphs: list[Data],
+    device: torch.device,
+) -> dict[str, float]:
+    """Evalúa un modelo GNN sobre una lista de grafos temporales.
+
+    Args:
+        model: Modelo GNN en modo eval.
+        graphs: Lista de grafos PyG con active_mask.
+        device: Dispositivo (cpu/cuda).
+
+    Returns:
+        Diccionario con métricas de clasificación.
+    """
+    model.eval()
+    all_predictions = []
+    all_targets = []
+
+    for graph in graphs:
+        x = graph.x.to(device)
+        edge_index = graph.edge_index.to(device)
+        edge_weight = None
+        if graph.edge_attr is not None:
+            edge_weight = graph.edge_attr.squeeze(-1).to(device)
+        mask = graph.active_mask
+
+        logits = model(x, edge_index, edge_weight=edge_weight).squeeze(-1)
+        probs = torch.sigmoid(logits).cpu().numpy()
+
+        all_predictions.append(probs[mask.numpy()])
+        all_targets.append(graph.y[mask].numpy())
+
+    if not all_predictions:
+        return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+
+    predictions = np.concatenate(all_predictions)
+    targets = np.concatenate(all_targets)
+
+    return compute_classification_metrics(predictions, targets)
 
 
 @torch.no_grad()

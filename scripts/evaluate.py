@@ -18,18 +18,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import FlightDelayDataset, create_splits, get_feature_columns
 from src.data.features import build_feature_matrix
+from src.data.graph_builder import build_graph_dataset, split_graphs_temporal
 from src.data.loader import load_flight_data
 from src.data.preprocessing import preprocess_pipeline
-from src.evaluation.metrics import compute_all_metrics, evaluate_model
+from src.evaluation.metrics import (
+    compute_all_metrics,
+    evaluate_graph_model,
+    evaluate_model,
+)
 from src.evaluation.visualization import (
     plot_error_distribution,
     plot_predictions_vs_actual,
 )
+from src.models.basic_gcn import BasicGCN
 from src.models.dense_nn import DenseNN
 from src.utils.config import load_config
 from src.utils.io import get_data_dir, load_checkpoint
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
+
+GRAPH_MODELS = {"basic_gcn"}
 
 logger = setup_logger(__name__)
 
@@ -57,6 +65,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _build_model(model_name: str, model_config: dict, input_dim: int) -> torch.nn.Module:
+    """Instancia el modelo según su nombre y configuración.
+
+    Args:
+        model_name: Nombre del modelo.
+        model_config: Configuración específica del modelo.
+        input_dim: Dimensión de entrada.
+
+    Returns:
+        Modelo de PyTorch.
+    """
+    if model_name == "dense_nn":
+        return DenseNN(
+            input_dim=input_dim,
+            hidden_dims=model_config.get("hidden_dims", [256, 128, 64]),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
+    if model_name == "basic_gcn":
+        return BasicGCN(
+            input_dim=input_dim,
+            hidden_channels=model_config.get("hidden_channels", 64),
+            num_layers=model_config.get("num_layers", 3),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
+    raise ValueError(f"Modelo no reconocido: {model_name}")
+
+
 def main() -> None:
     """Punto de entrada principal de la evaluación."""
     args = parse_args()
@@ -64,12 +101,13 @@ def main() -> None:
     seed = config.get("reproducibility", {}).get("seed", 42)
     set_seed(seed)
 
+    model_name = config["model"]["name"]
     logger.info("=" * 60)
-    logger.info("EVALUACIÓN - %s", config["model"]["name"])
+    logger.info("EVALUACIÓN - %s", model_name)
     logger.info("Checkpoint: %s", args.checkpoint)
     logger.info("=" * 60)
 
-    # --- Carga de datos (solo test) ---
+    # --- Carga de datos ---
     data_dir = get_data_dir("raw", config)
     year = config["data"].get("years", [2018])[0]
     columns = config["data"].get("columns")
@@ -81,63 +119,79 @@ def main() -> None:
     top_n = config.get("graph", {}).get("top_n_airports", 30)
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
 
-    target_col = config.get("features", {}).get("target", "ArrDelay")
-    df, encoders, scaler = build_feature_matrix(df, config)
-
-    splits = create_splits(df, config, target_col=target_col)
-    test_features, test_targets = splits["test"]
-
-    # --- Modelo ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    input_dim = test_features.shape[1]
-
-    model_name = config["model"]["name"]
     model_config = config["model"].get(model_name, {})
 
-    if model_name == "dense_nn":
-        model = DenseNN(
-            input_dim=input_dim,
-            hidden_dims=model_config.get("hidden_dims", [256, 128, 64]),
-            dropout=model_config.get("dropout", 0.3),
-        )
+    if model_name in GRAPH_MODELS:
+        # --- Pipeline de grafos ---
+        graphs, airport_map = build_graph_dataset(df, airports, config)
+        graph_splits = split_graphs_temporal(graphs)
+        test_graphs = graph_splits["test"]
+
+        if not test_graphs:
+            logger.error("No hay grafos de test para evaluar.")
+            return
+
+        input_dim = test_graphs[0].x.shape[1]
+        model = _build_model(model_name, model_config, input_dim)
+
+        checkpoint_info = load_checkpoint(args.checkpoint, model)
+        logger.info("Checkpoint cargado: época %d, métricas=%s",
+                    checkpoint_info["epoch"], checkpoint_info["metrics"])
+
+        model = model.to(device)
+        metrics = evaluate_graph_model(model, test_graphs, device)
+
+        logger.info("=" * 40)
+        logger.info("RESULTADOS EN TEST (clasificación binaria):")
+        for name, value in metrics.items():
+            logger.info("  %s: %.4f", name.upper(), value)
+        logger.info("=" * 40)
+
     else:
-        raise ValueError(f"Modelo no reconocido: {model_name}")
+        # --- Pipeline tabular ---
+        target_col = config.get("features", {}).get("target", "ArrDelay")
+        df, encoders, scaler = build_feature_matrix(df, config)
 
-    # Cargar checkpoint
-    checkpoint_info = load_checkpoint(args.checkpoint, model)
-    logger.info("Checkpoint cargado: época %d, métricas=%s",
-                checkpoint_info["epoch"], checkpoint_info["metrics"])
+        splits = create_splits(df, config, target_col=target_col)
+        test_features, test_targets = splits["test"]
 
-    model = model.to(device)
+        input_dim = test_features.shape[1]
+        model = _build_model(model_name, model_config, input_dim)
 
-    # --- Evaluación ---
-    test_dataset = FlightDelayDataset(test_features, test_targets)
-    batch_size = config["training"].get("batch_size", 512)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        checkpoint_info = load_checkpoint(args.checkpoint, model)
+        logger.info("Checkpoint cargado: época %d, métricas=%s",
+                    checkpoint_info["epoch"], checkpoint_info["metrics"])
 
-    metrics = evaluate_model(model, test_loader, device)
+        model = model.to(device)
 
-    logger.info("=" * 40)
-    logger.info("RESULTADOS EN TEST:")
-    for name, value in metrics.items():
-        logger.info("  %s: %.4f", name.upper(), value)
-    logger.info("=" * 40)
+        test_dataset = FlightDelayDataset(test_features, test_targets)
+        batch_size = config["training"].get("batch_size", 512)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # --- Gráficos opcionales ---
-    if args.plots:
-        model.eval()
-        all_preds, all_targets = [], []
-        with torch.no_grad():
-            for features, targets in test_loader:
-                preds = model(features.to(device)).squeeze(-1).cpu().numpy()
-                all_preds.append(preds)
-                all_targets.append(targets.numpy())
+        metrics = evaluate_model(model, test_loader, device)
 
-        predictions = np.concatenate(all_preds)
-        targets = np.concatenate(all_targets)
+        logger.info("=" * 40)
+        logger.info("RESULTADOS EN TEST:")
+        for name, value in metrics.items():
+            logger.info("  %s: %.4f", name.upper(), value)
+        logger.info("=" * 40)
 
-        plot_predictions_vs_actual(predictions, targets)
-        plot_error_distribution(predictions, targets)
+        # --- Gráficos opcionales ---
+        if args.plots:
+            model.eval()
+            all_preds, all_targets = [], []
+            with torch.no_grad():
+                for features, targets in test_loader:
+                    preds = model(features.to(device)).squeeze(-1).cpu().numpy()
+                    all_preds.append(preds)
+                    all_targets.append(targets.numpy())
+
+            predictions = np.concatenate(all_preds)
+            targets = np.concatenate(all_targets)
+
+            plot_predictions_vs_actual(predictions, targets)
+            plot_error_distribution(predictions, targets)
 
 
 if __name__ == "__main__":
