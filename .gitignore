@@ -225,5 +225,8 @@ outputs/
 CLAUDE.md
 GUIA_EQUIPO.md
 
+# Local config overrides (machine-specific paths)
+configs/local.yaml
+
 # Weights & Biases
 wandb/
