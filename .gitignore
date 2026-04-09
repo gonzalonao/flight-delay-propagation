@@ -205,3 +205,25 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =============================================================================
+# Project-specific
+# =============================================================================
+
+# Data files (too large for git)
+data/raw/
+data/processed/
+*.parquet
+*.pkl
+
+# Model checkpoints and outputs
+outputs/
+*.pt
+*.pth
+
+# Claude Code project files (machine-specific)
+CLAUDE.md
+GUIA_EQUIPO.md
+
+# Weights & Biases
+wandb/
