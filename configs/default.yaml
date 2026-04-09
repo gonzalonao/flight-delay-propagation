@@ -9,6 +9,8 @@ data:
   sample_frac: 0.1               # Fracción de datos para desarrollo rápido
   random_seed: 42
   # Columnas relevantes del dataset de Kaggle
+  # Nota: el Parquet NO contiene CarrierDelay, WeatherDelay, NASDelay,
+  # SecurityDelay ni LateAircraftDelay (solo están en algunos CSVs).
   columns:
     - FlightDate
     - Airline
@@ -21,11 +23,9 @@ data:
     - Cancelled
     - Diverted
     - AirTime
-    - CarrierDelay
-    - WeatherDelay
-    - NASDelay
-    - SecurityDelay
-    - LateAircraftDelay
+    - Month
+    - DayOfWeek
+    - DayofMonth
 
 features:
   target: ArrDelay

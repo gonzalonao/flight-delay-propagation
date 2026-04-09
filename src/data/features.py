@@ -30,9 +30,18 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame con features temporales añadidas.
     """
-    if "FlightDate" in df.columns:
+    # Usar Month/DayOfWeek del Parquet si existen, sino extraer de FlightDate
+    if "Month" in df.columns and "month" not in df.columns:
+        df["month"] = df["Month"]
+    elif "FlightDate" in df.columns and "month" not in df.columns:
         df["month"] = df["FlightDate"].dt.month
+
+    if "DayOfWeek" in df.columns and "day_of_week" not in df.columns:
+        df["day_of_week"] = df["DayOfWeek"]
+    elif "FlightDate" in df.columns and "day_of_week" not in df.columns:
         df["day_of_week"] = df["FlightDate"].dt.dayofweek
+
+    if "day_of_week" in df.columns:
         df["is_weekend"] = (df["day_of_week"] >= 5).astype(int)
 
     if "Hour" in df.columns:
