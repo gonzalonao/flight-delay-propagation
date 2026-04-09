@@ -25,15 +25,33 @@ def get_project_root() -> Path:
     raise RuntimeError("No se encontró pyproject.toml en los directorios padres")
 
 
-def get_data_dir(subdir: str = "raw") -> Path:
+def get_data_dir(
+    subdir: str = "raw",
+    config: dict[str, Any] | None = None,
+) -> Path:
     """Devuelve la ruta al directorio de datos.
 
+    Si se proporciona config, usa las rutas definidas en data.raw_dir o
+    data.processed_dir. Si no, usa las rutas por defecto dentro del proyecto.
+    Soporta rutas absolutas (e.g., "E:/TFM-Data/raw") y relativas.
+
     Args:
-        subdir: Subdirectorio dentro de data/ ("raw" o "processed").
+        subdir: Tipo de datos ("raw" o "processed").
+        config: Diccionario de configuración (opcional).
 
     Returns:
         Ruta al directorio de datos solicitado.
     """
+    if config is not None:
+        key = "raw_dir" if subdir == "raw" else "processed_dir"
+        path_str = config.get("data", {}).get(key)
+        if path_str:
+            data_dir = Path(path_str)
+            if not data_dir.is_absolute():
+                data_dir = get_project_root() / data_dir
+            data_dir.mkdir(parents=True, exist_ok=True)
+            return data_dir
+
     data_dir = get_project_root() / "data" / subdir
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
