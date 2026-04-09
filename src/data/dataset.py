@@ -67,6 +67,7 @@ def get_feature_columns(df: pd.DataFrame, target_col: str = "ArrDelay") -> list[
     exclude = {
         target_col, "FlightDate", "Airline", "Origin", "Dest",
         "CRSDepTime", "Cancelled", "Diverted", "Hour", "day_of_week",
+        "Month", "DayOfWeek", "DayofMonth",  # Raw Parquet columns (usamos versiones procesadas)
     }
 
     feature_cols = [
@@ -102,7 +103,18 @@ def create_splits(
     val_months = split_config.get("val_months", [10, 11])
     test_months = split_config.get("test_months", [12])
 
-    month_col = df["FlightDate"].dt.month if "FlightDate" in df.columns else df["month"]
+    # Determinar columna de mes para split temporal.
+    # IMPORTANTE: 'month' puede estar normalizada por StandardScaler, así que
+    # priorizar 'Month' (raw del Parquet) o FlightDate (sin escalar).
+    if "Month" in df.columns:
+        month_col = df["Month"]
+    elif "FlightDate" in df.columns:
+        month_col = df["FlightDate"].dt.month
+    elif "month" in df.columns:
+        # Fallback: solo si no está escalada (valores enteros 1-12)
+        month_col = df["month"]
+    else:
+        raise ValueError("No se encontró columna de mes para separación temporal")
 
     feature_cols = get_feature_columns(df, target_col)
 

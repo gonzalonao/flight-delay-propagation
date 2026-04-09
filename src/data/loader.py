@@ -28,11 +28,9 @@ CSV_DTYPES: dict[str, Any] = {
     "Cancelled": bool,
     "Diverted": bool,
     "AirTime": "Float32",
-    "CarrierDelay": "Float32",
-    "WeatherDelay": "Float32",
-    "NASDelay": "Float32",
-    "SecurityDelay": "Float32",
-    "LateAircraftDelay": "Float32",
+    "Month": "Int8",
+    "DayOfWeek": "Int8",
+    "DayofMonth": "Int8",
 }
 
 
@@ -151,15 +149,32 @@ def load_flight_data(
         return load_parquet(parquet_path, columns=columns,
                             sample_frac=sample_frac, random_seed=random_seed)
 
-    # Fallback a CSV
+    # Fallback a CSV anual combinado
     csv_path = data_dir / f"Combined_Flights_{year}.csv"
     if csv_path.exists():
         return load_csv_chunked(csv_path, columns=columns,
                                 sample_frac=sample_frac, random_seed=random_seed)
 
+    # Fallback a CSVs mensuales: Flights_{year}_{month}.csv
+    monthly_csvs = sorted(data_dir.glob(f"Flights_{year}_*.csv"))
+    if monthly_csvs:
+        logger.info("Cargando %d archivos mensuales para %d", len(monthly_csvs), year)
+        dfs = []
+        for csv_file in monthly_csvs:
+            chunk_df = load_csv_chunked(csv_file, columns=columns,
+                                        sample_frac=sample_frac,
+                                        random_seed=random_seed)
+            dfs.append(chunk_df)
+        result = pd.concat(dfs, ignore_index=True)
+        del dfs
+        gc.collect()
+        logger.info("Total combinado de CSVs mensuales: %d filas", len(result))
+        return result
+
     raise FileNotFoundError(
         f"No se encontró archivo de datos para {year} en {data_dir}. "
-        f"Se buscó: {parquet_path.name} y {csv_path.name}"
+        f"Se buscó: {parquet_path.name}, {csv_path.name}, "
+        f"y Flights_{year}_*.csv"
     )
 
 

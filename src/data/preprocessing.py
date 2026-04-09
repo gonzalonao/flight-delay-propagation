@@ -64,8 +64,7 @@ def fill_delay_nulls(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame con nulos de retraso rellenados.
     """
     delay_columns = [
-        "DepDelay", "CarrierDelay", "WeatherDelay",
-        "NASDelay", "SecurityDelay", "LateAircraftDelay",
+        "DepDelay", "ArrDelay",
     ]
 
     for col in delay_columns:
