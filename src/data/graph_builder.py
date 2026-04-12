@@ -2,7 +2,8 @@
 
 Transforma datos tabulares de vuelos en grafos donde los nodos son
 aeropuertos y las aristas son rutas aéreas. Genera snapshots temporales
-con features agregadas por aeropuerto y targets binarios de retraso.
+con features agregadas por aeropuerto y targets continuos de retraso
+(minutos de retraso promedio en la siguiente ventana temporal).
 """
 
 import numpy as np
@@ -157,20 +158,20 @@ def compute_node_features(
 def compute_node_targets(
     window_df: pd.DataFrame,
     airport_map: dict[str, int],
-    delay_threshold: float = 15.0,
 ) -> torch.Tensor:
-    """Genera targets binarios: ¿el aeropuerto tendrá retraso significativo?
+    """Genera targets continuos: retraso promedio de salida por aeropuerto.
 
-    Un aeropuerto se considera "retrasado" si el retraso promedio de los
-    vuelos que salen de él supera el umbral.
+    Calcula el retraso promedio (en minutos) de los vuelos que salen de
+    cada aeropuerto en la ventana temporal futura. Esto permite evaluar
+    con métricas de regresión y derivar clasificación binaria usando un
+    umbral externo.
 
     Args:
         window_df: DataFrame de la ventana FUTURA (target).
         airport_map: Mapeo de código IATA a índice.
-        delay_threshold: Umbral en minutos.
 
     Returns:
-        Tensor binario [num_nodes].
+        Tensor continuo [num_nodes] con retraso promedio en minutos.
     """
     num_nodes = len(airport_map)
     targets = torch.zeros(num_nodes, dtype=torch.float32)
@@ -183,10 +184,9 @@ def compute_node_targets(
         if airport not in airport_map:
             continue
         idx = airport_map[airport]
-        avg_delay = group["DepDelay"].mean()
-        targets[idx] = 1.0 if avg_delay > delay_threshold else 0.0
+        targets[idx] = group["DepDelay"].mean()
 
-    return targets
+    return torch.nan_to_num(targets, nan=0.0)
 
 
 def create_temporal_graphs(
@@ -255,9 +255,7 @@ def create_temporal_graphs(
             node_features = compute_node_features(
                 window_df, airport_map, delay_threshold
             )
-            node_targets = compute_node_targets(
-                next_df, airport_map, delay_threshold
-            )
+            node_targets = compute_node_targets(next_df, airport_map)
 
             # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
             active_mask = node_features.abs().sum(dim=1) > 0

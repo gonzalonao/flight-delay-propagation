@@ -21,11 +21,7 @@ from src.data.features import build_feature_matrix
 from src.data.graph_builder import build_graph_dataset, split_graphs_temporal
 from src.data.loader import load_flight_data
 from src.data.preprocessing import preprocess_pipeline
-from src.evaluation.metrics import (
-    compute_all_metrics,
-    evaluate_graph_model,
-    evaluate_model,
-)
+from src.evaluation.metrics import evaluate_graph_model, evaluate_model
 from src.evaluation.visualization import (
     plot_error_distribution,
     plot_predictions_vs_actual,
@@ -40,6 +36,29 @@ from src.utils.reproducibility import set_seed
 GRAPH_MODELS = {"basic_gcn"}
 
 logger = setup_logger(__name__)
+
+
+def _log_test_results(metrics: dict[str, float], model_name: str) -> None:
+    """Muestra los resultados de test en formato unificado.
+
+    Args:
+        metrics: Diccionario con métricas unificadas.
+        model_name: Nombre del modelo evaluado.
+    """
+    logger.info("=" * 50)
+    logger.info("RESULTADOS EN TEST — %s", model_name)
+    logger.info("-" * 50)
+    logger.info("  Regresión:")
+    logger.info("    MAE:  %.4f min", metrics["mae"])
+    logger.info("    RMSE: %.4f min", metrics["rmse"])
+    logger.info("    MAPE: %.4f %%", metrics["mape"])
+    logger.info("    R²:   %.4f", metrics["r2"])
+    logger.info("  Clasificación (umbral=15 min):")
+    logger.info("    ACCURACY:  %.4f", metrics["accuracy"])
+    logger.info("    PRECISION: %.4f", metrics["precision"])
+    logger.info("    RECALL:    %.4f", metrics["recall"])
+    logger.info("    F1:        %.4f", metrics["f1"])
+    logger.info("=" * 50)
 
 
 def parse_args() -> argparse.Namespace:
@@ -122,6 +141,10 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_config = config["model"].get(model_name, {})
 
+    delay_threshold = config.get("evaluation", {}).get(
+        "delay_threshold_minutes", 15
+    )
+
     if model_name in GRAPH_MODELS:
         # --- Pipeline de grafos ---
         graphs, airport_map = build_graph_dataset(df, airports, config)
@@ -140,13 +163,9 @@ def main() -> None:
                     checkpoint_info["epoch"], checkpoint_info["metrics"])
 
         model = model.to(device)
-        metrics = evaluate_graph_model(model, test_graphs, device)
-
-        logger.info("=" * 40)
-        logger.info("RESULTADOS EN TEST (clasificación binaria):")
-        for name, value in metrics.items():
-            logger.info("  %s: %.4f", name.upper(), value)
-        logger.info("=" * 40)
+        metrics = evaluate_graph_model(
+            model, test_graphs, device, delay_threshold
+        )
 
     else:
         # --- Pipeline tabular ---
@@ -169,29 +188,26 @@ def main() -> None:
         batch_size = config["training"].get("batch_size", 512)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        metrics = evaluate_model(model, test_loader, device)
+        metrics = evaluate_model(model, test_loader, device, delay_threshold)
 
-        logger.info("=" * 40)
-        logger.info("RESULTADOS EN TEST:")
-        for name, value in metrics.items():
-            logger.info("  %s: %.4f", name.upper(), value)
-        logger.info("=" * 40)
+    # --- Resultados unificados ---
+    _log_test_results(metrics, model_name)
 
-        # --- Gráficos opcionales ---
-        if args.plots:
-            model.eval()
-            all_preds, all_targets = [], []
-            with torch.no_grad():
-                for features, targets in test_loader:
-                    preds = model(features.to(device)).squeeze(-1).cpu().numpy()
-                    all_preds.append(preds)
-                    all_targets.append(targets.numpy())
+    # --- Gráficos opcionales (solo modelos tabulares por ahora) ---
+    if args.plots and model_name not in GRAPH_MODELS:
+        model.eval()
+        all_preds, all_targets = [], []
+        with torch.no_grad():
+            for features, targets in test_loader:
+                preds = model(features.to(device)).squeeze(-1).cpu().numpy()
+                all_preds.append(preds)
+                all_targets.append(targets.numpy())
 
-            predictions = np.concatenate(all_preds)
-            targets = np.concatenate(all_targets)
+        predictions = np.concatenate(all_preds)
+        targets = np.concatenate(all_targets)
 
-            plot_predictions_vs_actual(predictions, targets)
-            plot_error_distribution(predictions, targets)
+        plot_predictions_vs_actual(predictions, targets)
+        plot_error_distribution(predictions, targets)
 
 
 if __name__ == "__main__":
