@@ -1,8 +1,8 @@
-"""Red de convolución sobre grafos (GCN) para clasificación binaria de retrasos.
+"""Red de convolución sobre grafos (GCN) para predicción de retrasos.
 
 Primer modelo GNN del proyecto. Opera sobre grafos de aeropuertos donde
 los nodos representan aeropuertos y las aristas representan rutas aéreas.
-Predice si cada aeropuerto tendrá un retraso significativo en la
+Predice el retraso promedio (en minutos) de cada aeropuerto en la
 siguiente ventana temporal.
 """
 
@@ -13,7 +13,7 @@ from torch_geometric.nn import GCNConv, global_mean_pool
 
 
 class BasicGCN(nn.Module):
-    """GCN para clasificación binaria de retrasos por aeropuerto.
+    """GCN para predicción de retrasos por aeropuerto (regresión).
 
     Arquitectura: N capas GCNConv con BatchNorm, ReLU y dropout,
     seguidas de una capa lineal de salida. Cada capa propaga
@@ -51,7 +51,7 @@ class BasicGCN(nn.Module):
             self.convs.append(GCNConv(hidden_channels, hidden_channels))
             self.bns.append(nn.BatchNorm1d(hidden_channels))
 
-        # Capa de salida: clasificación binaria por nodo
+        # Capa de salida: regresión (retraso en minutos) por nodo
         self.classifier = nn.Linear(hidden_channels, 1)
 
     def forward(

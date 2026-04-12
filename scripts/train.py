@@ -124,6 +124,32 @@ def _build_optimizer_and_scheduler(
     return optimizer, scheduler
 
 
+def _log_test_results(metrics: dict[str, float], model_name: str) -> None:
+    """Muestra los resultados de test en formato unificado.
+
+    Agrupa las métricas en regresión y clasificación derivada para
+    facilitar la comparación entre modelos.
+
+    Args:
+        metrics: Diccionario con métricas unificadas.
+        model_name: Nombre del modelo evaluado.
+    """
+    logger.info("=" * 50)
+    logger.info("RESULTADOS EN TEST — %s", model_name)
+    logger.info("-" * 50)
+    logger.info("  Regresión:")
+    logger.info("    MAE:  %.4f min", metrics["mae"])
+    logger.info("    RMSE: %.4f min", metrics["rmse"])
+    logger.info("    MAPE: %.4f %%", metrics["mape"])
+    logger.info("    R²:   %.4f", metrics["r2"])
+    logger.info("  Clasificación (umbral=15 min):")
+    logger.info("    ACCURACY:  %.4f", metrics["accuracy"])
+    logger.info("    PRECISION: %.4f", metrics["precision"])
+    logger.info("    RECALL:    %.4f", metrics["recall"])
+    logger.info("    F1:        %.4f", metrics["f1"])
+    logger.info("=" * 50)
+
+
 def _train_tabular(config: dict, df, airports: list[str]) -> None:
     """Pipeline de entrenamiento para modelos tabulares (DenseNN, LSTM)."""
     target_col = config.get("features", {}).get("target", "ArrDelay")
@@ -179,12 +205,11 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
         test_dataset = FlightDelayDataset(test_features, test_targets)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        metrics = evaluate_model(model, test_loader, device)
-        logger.info("=" * 40)
-        logger.info("RESULTADOS EN TEST:")
-        for name, value in metrics.items():
-            logger.info("  %s: %.4f", name.upper(), value)
-        logger.info("=" * 40)
+        delay_threshold = config.get("evaluation", {}).get(
+            "delay_threshold_minutes", 15
+        )
+        metrics = evaluate_model(model, test_loader, device, delay_threshold)
+        _log_test_results(metrics, config["model"]["name"])
 
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 
@@ -215,7 +240,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
 
     training_config = config["training"]
     optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.MSELoss()
 
     output_dir = get_output_dir()
     checkpoint_path = str(output_dir / f"best_{config['model']['name']}.pt")
@@ -240,12 +265,13 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
     # Evaluación final sobre grafos de test
     test_graphs = graph_splits["test"]
     if test_graphs:
-        metrics = evaluate_graph_model(model, test_graphs, device)
-        logger.info("=" * 40)
-        logger.info("RESULTADOS EN TEST (clasificación binaria):")
-        for name, value in metrics.items():
-            logger.info("  %s: %.4f", name.upper(), value)
-        logger.info("=" * 40)
+        delay_threshold = config.get("evaluation", {}).get(
+            "delay_threshold_minutes", 15
+        )
+        metrics = evaluate_graph_model(
+            model, test_graphs, device, delay_threshold
+        )
+        _log_test_results(metrics, config["model"]["name"])
 
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 

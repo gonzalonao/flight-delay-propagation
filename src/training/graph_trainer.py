@@ -23,7 +23,7 @@ class GraphTrainer:
     Args:
         model: Modelo GNN de PyTorch.
         optimizer: Optimizador.
-        criterion: Función de pérdida (BCEWithLogitsLoss para clasificación).
+        criterion: Función de pérdida (MSELoss para regresión).
         device: Dispositivo (cpu/cuda).
         scheduler: Learning rate scheduler (opcional).
         gradient_clip: Valor máximo de gradiente (0 = sin clip).
