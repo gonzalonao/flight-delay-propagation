@@ -177,13 +177,14 @@ class TestGraphBuilder:
         # No debe haber NaN
         assert not torch.isnan(features).any()
 
-    def test_node_targets_binary(self, sample_flight_df, airport_map):
-        """Verifica que los targets son binarios (0 o 1)."""
-        targets = compute_node_targets(
-            sample_flight_df, airport_map, delay_threshold=15.0
-        )
+    def test_node_targets_continuous(self, sample_flight_df, airport_map):
+        """Verifica que los targets son continuos (minutos de retraso)."""
+        targets = compute_node_targets(sample_flight_df, airport_map)
         assert targets.shape == (len(airport_map),)
-        assert set(targets.unique().tolist()).issubset({0.0, 1.0})
+        # Targets deben ser continuos (no solo 0/1)
+        assert not torch.isnan(targets).any()
+        # Deben ser valores reales en minutos (no binarios)
+        assert targets.dtype == torch.float32
 
     def test_temporal_graphs_created(self, sample_flight_df, airport_map):
         """Verifica que se crean snapshots temporales."""

@@ -1,7 +1,10 @@
-"""Métricas de evaluación para modelos de predicción de retrasos.
+"""Métricas de evaluación unificadas para modelos de predicción de retrasos.
 
-Proporciona funciones para calcular MAE, RMSE, MAPE y R² (regresión),
-así como accuracy, precision, recall y F1 (clasificación binaria).
+Todos los modelos (tabulares y GNN) producen predicciones de regresión
+(retraso en minutos) y se evalúan con el mismo conjunto de métricas:
+- Regresión: MAE, RMSE, MAPE, R²
+- Clasificación derivada: Accuracy, Precision, Recall, F1
+  (aplicando un umbral sobre la predicción continua)
 """
 
 import numpy as np
@@ -78,7 +81,7 @@ def compute_r2(predictions: np.ndarray, targets: np.ndarray) -> float:
 def compute_all_metrics(
     predictions: np.ndarray, targets: np.ndarray
 ) -> dict[str, float]:
-    """Calcula todas las métricas a la vez.
+    """Calcula todas las métricas de regresión.
 
     Args:
         predictions: Predicciones del modelo.
@@ -96,20 +99,23 @@ def compute_all_metrics(
 
 
 def compute_classification_metrics(
-    predictions: np.ndarray, targets: np.ndarray, threshold: float = 0.5
+    predictions: np.ndarray, targets: np.ndarray, threshold: float = 15.0
 ) -> dict[str, float]:
-    """Calcula métricas de clasificación binaria.
+    """Calcula métricas de clasificación binaria derivadas de regresión.
+
+    Convierte predicciones y targets continuos (minutos de retraso)
+    a clases binarias usando un umbral de retraso.
 
     Args:
-        predictions: Probabilidades predichas (después de sigmoid).
-        targets: Valores reales binarios (0 o 1).
-        threshold: Umbral para convertir probabilidades a clases.
+        predictions: Predicciones continuas (minutos de retraso).
+        targets: Valores reales continuos (minutos de retraso).
+        threshold: Umbral en minutos para considerar "retrasado".
 
     Returns:
         Diccionario con accuracy, precision, recall, f1.
     """
     pred_labels = (predictions >= threshold).astype(int)
-    target_labels = targets.astype(int)
+    target_labels = (targets >= threshold).astype(int)
 
     tp = np.sum((pred_labels == 1) & (target_labels == 1))
     fp = np.sum((pred_labels == 1) & (target_labels == 0))
@@ -129,21 +135,53 @@ def compute_classification_metrics(
     }
 
 
+def compute_unified_metrics(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    delay_threshold: float = 15.0,
+) -> dict[str, float]:
+    """Calcula métricas unificadas: regresión + clasificación derivada.
+
+    Función estándar para evaluar todos los modelos del proyecto.
+    Combina métricas de regresión (MAE, RMSE, MAPE, R²) con métricas
+    de clasificación (Accuracy, Precision, Recall, F1) derivadas
+    de aplicar un umbral de retraso a las predicciones continuas.
+
+    Args:
+        predictions: Predicciones continuas (minutos de retraso).
+        targets: Valores reales continuos (minutos de retraso).
+        delay_threshold: Umbral en minutos para clasificación binaria.
+
+    Returns:
+        Diccionario con todas las métricas (regresión + clasificación).
+    """
+    regression = compute_all_metrics(predictions, targets)
+    classification = compute_classification_metrics(
+        predictions, targets, threshold=delay_threshold
+    )
+    return {**regression, **classification}
+
+
 @torch.no_grad()
 def evaluate_graph_model(
     model: torch.nn.Module,
     graphs: list[Data],
     device: torch.device,
+    delay_threshold: float = 15.0,
 ) -> dict[str, float]:
     """Evalúa un modelo GNN sobre una lista de grafos temporales.
+
+    El modelo produce predicciones continuas (minutos de retraso)
+    y se evalúa con métricas unificadas de regresión + clasificación.
 
     Args:
         model: Modelo GNN en modo eval.
         graphs: Lista de grafos PyG con active_mask.
         device: Dispositivo (cpu/cuda).
+        delay_threshold: Umbral en minutos para clasificación derivada.
 
     Returns:
-        Diccionario con métricas de clasificación.
+        Diccionario con métricas unificadas (regresión + clasificación).
     """
     model.eval()
     all_predictions = []
@@ -157,19 +195,23 @@ def evaluate_graph_model(
             edge_weight = graph.edge_attr.squeeze(-1).to(device)
         mask = graph.active_mask
 
-        logits = model(x, edge_index, edge_weight=edge_weight).squeeze(-1)
-        probs = torch.sigmoid(logits).cpu().numpy()
+        # Salida directa del modelo (regresión, sin sigmoid)
+        preds = model(x, edge_index, edge_weight=edge_weight).squeeze(-1)
+        preds = preds.cpu().numpy()
 
-        all_predictions.append(probs[mask.numpy()])
+        all_predictions.append(preds[mask.numpy()])
         all_targets.append(graph.y[mask].numpy())
 
     if not all_predictions:
-        return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+        return {
+            "mae": 0.0, "rmse": 0.0, "mape": 0.0, "r2": 0.0,
+            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+        }
 
     predictions = np.concatenate(all_predictions)
     targets = np.concatenate(all_targets)
 
-    return compute_classification_metrics(predictions, targets)
+    return compute_unified_metrics(predictions, targets, delay_threshold)
 
 
 @torch.no_grad()
@@ -177,16 +219,20 @@ def evaluate_model(
     model: torch.nn.Module,
     dataloader: torch.utils.data.DataLoader,
     device: torch.device,
+    delay_threshold: float = 15.0,
 ) -> dict[str, float]:
-    """Evalúa un modelo sobre un dataloader completo.
+    """Evalúa un modelo tabular sobre un dataloader completo.
+
+    Calcula métricas unificadas de regresión + clasificación derivada.
 
     Args:
         model: Modelo de PyTorch en modo eval.
         dataloader: DataLoader con datos de test.
         device: Dispositivo (cpu/cuda).
+        delay_threshold: Umbral en minutos para clasificación derivada.
 
     Returns:
-        Diccionario con todas las métricas.
+        Diccionario con métricas unificadas (regresión + clasificación).
     """
     model.eval()
     all_predictions = []
@@ -201,4 +247,4 @@ def evaluate_model(
     predictions = np.concatenate(all_predictions)
     targets = np.concatenate(all_targets)
 
-    return compute_all_metrics(predictions, targets)
+    return compute_unified_metrics(predictions, targets, delay_threshold)
