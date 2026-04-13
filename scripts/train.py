@@ -22,10 +22,16 @@ from src.data.features import build_feature_matrix
 from src.data.graph_builder import build_graph_dataset, split_graphs_temporal
 from src.data.loader import load_flight_data
 from src.data.preprocessing import preprocess_pipeline
-from src.evaluation.metrics import evaluate_graph_model, evaluate_model
+from src.evaluation.metrics import (
+    evaluate_graph_model,
+    evaluate_model,
+    evaluate_multi_horizon_graph_model,
+)
 from src.models.basic_gcn import BasicGCN
 from src.models.dense_nn import DenseNN
+from src.models.multi_horizon_gat import MultiHorizonGAT
 from src.training.graph_trainer import GraphTrainer
+from src.training.losses import WeightedMSELoss
 from src.training.trainer import Trainer
 from src.utils.config import load_config
 from src.utils.io import get_data_dir, get_output_dir
@@ -38,10 +44,14 @@ logger = setup_logger(__name__)
 MODEL_REGISTRY = {
     "dense_nn": DenseNN,
     "basic_gcn": BasicGCN,
+    "multi_horizon_gat": MultiHorizonGAT,
 }
 
 # Modelos que usan grafos PyG en vez de datos tabulares
-GRAPH_MODELS = {"basic_gcn"}
+GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat"}
+
+# Modelos que producen targets multi-horizonte
+MULTI_HORIZON_MODELS = {"multi_horizon_gat"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,6 +94,18 @@ def build_model(config: dict, input_dim: int) -> torch.nn.Module:
             input_dim=input_dim,
             hidden_channels=model_config.get("hidden_channels", 64),
             num_layers=model_config.get("num_layers", 3),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
+    if model_name == "multi_horizon_gat":
+        graph_config = config.get("graph", {})
+        horizons = graph_config.get("prediction_horizons", [1, 2, 3, 4, 5])
+        return MultiHorizonGAT(
+            input_dim=input_dim,
+            hidden_channels=model_config.get("hidden_channels", 64),
+            num_heads=model_config.get("num_heads", 4),
+            num_layers=model_config.get("num_layers", 3),
+            num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
         )
 
@@ -148,6 +170,51 @@ def _log_test_results(metrics: dict[str, float], model_name: str) -> None:
     logger.info("    RECALL:    %.4f", metrics["recall"])
     logger.info("    F1:        %.4f", metrics["f1"])
     logger.info("=" * 50)
+
+
+def _log_multi_horizon_results(
+    metrics: dict[str, dict[str, float]],
+    model_name: str,
+    horizons: list[int],
+) -> None:
+    """Muestra los resultados multi-horizonte en formato unificado.
+
+    Args:
+        metrics: Diccionario con métricas por horizonte y promedio.
+        model_name: Nombre del modelo evaluado.
+        horizons: Lista de horizontes evaluados.
+    """
+    logger.info("=" * 60)
+    logger.info("RESULTADOS EN TEST — %s (multi-horizonte)", model_name)
+    logger.info("=" * 60)
+
+    for h in horizons:
+        key = f"horizon_{h}h"
+        m = metrics[key]
+        logger.info("  Horizonte +%dh:", h)
+        logger.info(
+            "    MAE: %.4f | RMSE: %.4f | MAPE: %.4f%% | R²: %.4f",
+            m["mae"], m["rmse"], m["mape"], m["r2"],
+        )
+        logger.info(
+            "    Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f",
+            m["accuracy"], m["precision"], m["recall"], m["f1"],
+        )
+
+    avg = metrics["average"]
+    logger.info("-" * 60)
+    logger.info("  PROMEDIO (todos los horizontes):")
+    logger.info("    Regresión:")
+    logger.info("      MAE:  %.4f min", avg["mae"])
+    logger.info("      RMSE: %.4f min", avg["rmse"])
+    logger.info("      MAPE: %.4f %%", avg["mape"])
+    logger.info("      R²:   %.4f", avg["r2"])
+    logger.info("    Clasificación (umbral=15 min):")
+    logger.info("      ACCURACY:  %.4f", avg["accuracy"])
+    logger.info("      PRECISION: %.4f", avg["precision"])
+    logger.info("      RECALL:    %.4f", avg["recall"])
+    logger.info("      F1:        %.4f", avg["f1"])
+    logger.info("=" * 60)
 
 
 def _train_tabular(config: dict, df, airports: list[str]) -> None:
@@ -216,34 +283,64 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
 
 def _train_graph(config: dict, df, airports: list[str]) -> None:
     """Pipeline de entrenamiento para modelos basados en grafos (GCN, GAT)."""
+    model_name = config["model"]["name"]
+    is_multi_horizon = model_name in MULTI_HORIZON_MODELS
+
+    # Para modelos single-horizon, no pasar prediction_horizons al builder
+    graph_config = config.copy()
+    if not is_multi_horizon:
+        graph_config = {**config, "graph": {**config.get("graph", {})}}
+        graph_config["graph"].pop("prediction_horizons", None)
+
     # Construir grafos temporales
-    graphs, airport_map = build_graph_dataset(df, airports, config)
+    graphs, airport_map = build_graph_dataset(df, airports, graph_config)
     graph_splits = split_graphs_temporal(graphs)
 
     train_graphs = graph_splits["train"]
     val_graphs = graph_splits["val"]
 
     if not train_graphs:
-        logger.error("No hay grafos de entrenamiento. Revisa los datos y la configuración.")
+        logger.error(
+            "No hay grafos de entrenamiento. Revisa los datos y la configuración."
+        )
         return
 
     # El input_dim viene de las node features del primer grafo
     input_dim = train_graphs[0].x.shape[1]
     model = build_model(config, input_dim)
-    logger.info("Modelo: %s | Parámetros: %d | Nodos: %d",
-                config["model"]["name"],
-                sum(p.numel() for p in model.parameters()),
-                len(airport_map))
+    logger.info(
+        "Modelo: %s | Parámetros: %d | Nodos: %d",
+        model_name,
+        sum(p.numel() for p in model.parameters()),
+        len(airport_map),
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Dispositivo: %s", device)
 
     training_config = config["training"]
     optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
-    criterion = torch.nn.MSELoss()
+
+    # Seleccionar función de pérdida
+    loss_config = training_config.get("loss", "mse")
+    if loss_config == "weighted_mse":
+        delay_threshold = config.get("evaluation", {}).get(
+            "delay_threshold_minutes", 15
+        )
+        delay_weight = training_config.get("delay_weight", 3.0)
+        criterion = WeightedMSELoss(
+            high_delay_threshold=delay_threshold,
+            high_delay_weight=delay_weight,
+        )
+        logger.info(
+            "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f)",
+            delay_threshold, delay_weight,
+        )
+    else:
+        criterion = torch.nn.MSELoss()
 
     output_dir = get_output_dir()
-    checkpoint_path = str(output_dir / f"best_{config['model']['name']}.pt")
+    checkpoint_path = str(output_dir / f"best_{model_name}.pt")
 
     trainer = GraphTrainer(
         model=model,
@@ -268,10 +365,20 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
         delay_threshold = config.get("evaluation", {}).get(
             "delay_threshold_minutes", 15
         )
-        metrics = evaluate_graph_model(
-            model, test_graphs, device, delay_threshold
-        )
-        _log_test_results(metrics, config["model"]["name"])
+
+        if is_multi_horizon:
+            horizons = config.get("graph", {}).get(
+                "prediction_horizons", [1, 2, 3, 4, 5]
+            )
+            metrics = evaluate_multi_horizon_graph_model(
+                model, test_graphs, device, horizons, delay_threshold
+            )
+            _log_multi_horizon_results(metrics, model_name, horizons)
+        else:
+            metrics = evaluate_graph_model(
+                model, test_graphs, device, delay_threshold
+            )
+            _log_test_results(metrics, model_name)
 
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 

@@ -21,19 +21,25 @@ from src.data.features import build_feature_matrix
 from src.data.graph_builder import build_graph_dataset, split_graphs_temporal
 from src.data.loader import load_flight_data
 from src.data.preprocessing import preprocess_pipeline
-from src.evaluation.metrics import evaluate_graph_model, evaluate_model
+from src.evaluation.metrics import (
+    evaluate_graph_model,
+    evaluate_model,
+    evaluate_multi_horizon_graph_model,
+)
 from src.evaluation.visualization import (
     plot_error_distribution,
     plot_predictions_vs_actual,
 )
 from src.models.basic_gcn import BasicGCN
 from src.models.dense_nn import DenseNN
+from src.models.multi_horizon_gat import MultiHorizonGAT
 from src.utils.config import load_config
 from src.utils.io import get_data_dir, load_checkpoint
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
 
-GRAPH_MODELS = {"basic_gcn"}
+GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat"}
+MULTI_HORIZON_MODELS = {"multi_horizon_gat"}
 
 logger = setup_logger(__name__)
 
@@ -61,6 +67,51 @@ def _log_test_results(metrics: dict[str, float], model_name: str) -> None:
     logger.info("=" * 50)
 
 
+def _log_multi_horizon_results(
+    metrics: dict[str, dict[str, float]],
+    model_name: str,
+    horizons: list[int],
+) -> None:
+    """Muestra los resultados multi-horizonte en formato unificado.
+
+    Args:
+        metrics: Diccionario con métricas por horizonte y promedio.
+        model_name: Nombre del modelo evaluado.
+        horizons: Lista de horizontes evaluados.
+    """
+    logger.info("=" * 60)
+    logger.info("RESULTADOS EN TEST — %s (multi-horizonte)", model_name)
+    logger.info("=" * 60)
+
+    for h in horizons:
+        key = f"horizon_{h}h"
+        m = metrics[key]
+        logger.info("  Horizonte +%dh:", h)
+        logger.info(
+            "    MAE: %.4f | RMSE: %.4f | MAPE: %.4f%% | R²: %.4f",
+            m["mae"], m["rmse"], m["mape"], m["r2"],
+        )
+        logger.info(
+            "    Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f",
+            m["accuracy"], m["precision"], m["recall"], m["f1"],
+        )
+
+    avg = metrics["average"]
+    logger.info("-" * 60)
+    logger.info("  PROMEDIO (todos los horizontes):")
+    logger.info("    Regresión:")
+    logger.info("      MAE:  %.4f min", avg["mae"])
+    logger.info("      RMSE: %.4f min", avg["rmse"])
+    logger.info("      MAPE: %.4f %%", avg["mape"])
+    logger.info("      R²:   %.4f", avg["r2"])
+    logger.info("    Clasificación (umbral=15 min):")
+    logger.info("      ACCURACY:  %.4f", avg["accuracy"])
+    logger.info("      PRECISION: %.4f", avg["precision"])
+    logger.info("      RECALL:    %.4f", avg["recall"])
+    logger.info("      F1:        %.4f", avg["f1"])
+    logger.info("=" * 60)
+
+
 def parse_args() -> argparse.Namespace:
     """Parsea los argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(description="Evaluar modelo entrenado")
@@ -84,17 +135,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_model(model_name: str, model_config: dict, input_dim: int) -> torch.nn.Module:
-    """Instancia el modelo según su nombre y configuración.
+def _build_model(config: dict, input_dim: int) -> torch.nn.Module:
+    """Instancia el modelo según la configuración completa.
 
     Args:
-        model_name: Nombre del modelo.
-        model_config: Configuración específica del modelo.
+        config: Configuración completa del proyecto.
         input_dim: Dimensión de entrada.
 
     Returns:
         Modelo de PyTorch.
     """
+    model_name = config["model"]["name"]
+    model_config = config["model"].get(model_name, {})
+
     if model_name == "dense_nn":
         return DenseNN(
             input_dim=input_dim,
@@ -107,6 +160,19 @@ def _build_model(model_name: str, model_config: dict, input_dim: int) -> torch.n
             input_dim=input_dim,
             hidden_channels=model_config.get("hidden_channels", 64),
             num_layers=model_config.get("num_layers", 3),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
+    if model_name == "multi_horizon_gat":
+        horizons = config.get("graph", {}).get(
+            "prediction_horizons", [1, 2, 3, 4, 5]
+        )
+        return MultiHorizonGAT(
+            input_dim=input_dim,
+            hidden_channels=model_config.get("hidden_channels", 64),
+            num_heads=model_config.get("num_heads", 4),
+            num_layers=model_config.get("num_layers", 3),
+            num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
         )
 
@@ -139,15 +205,21 @@ def main() -> None:
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_config = config["model"].get(model_name, {})
+    is_multi_horizon = model_name in MULTI_HORIZON_MODELS
 
     delay_threshold = config.get("evaluation", {}).get(
         "delay_threshold_minutes", 15
     )
 
     if model_name in GRAPH_MODELS:
+        # Para modelos single-horizon, no pasar prediction_horizons
+        graph_config = config.copy()
+        if not is_multi_horizon:
+            graph_config = {**config, "graph": {**config.get("graph", {})}}
+            graph_config["graph"].pop("prediction_horizons", None)
+
         # --- Pipeline de grafos ---
-        graphs, airport_map = build_graph_dataset(df, airports, config)
+        graphs, airport_map = build_graph_dataset(df, airports, graph_config)
         graph_splits = split_graphs_temporal(graphs)
         test_graphs = graph_splits["test"]
 
@@ -156,16 +228,29 @@ def main() -> None:
             return
 
         input_dim = test_graphs[0].x.shape[1]
-        model = _build_model(model_name, model_config, input_dim)
+        model = _build_model(config, input_dim)
 
         checkpoint_info = load_checkpoint(args.checkpoint, model)
-        logger.info("Checkpoint cargado: época %d, métricas=%s",
-                    checkpoint_info["epoch"], checkpoint_info["metrics"])
+        logger.info(
+            "Checkpoint cargado: época %d, métricas=%s",
+            checkpoint_info["epoch"], checkpoint_info["metrics"],
+        )
 
         model = model.to(device)
-        metrics = evaluate_graph_model(
-            model, test_graphs, device, delay_threshold
-        )
+
+        if is_multi_horizon:
+            horizons = config.get("graph", {}).get(
+                "prediction_horizons", [1, 2, 3, 4, 5]
+            )
+            metrics = evaluate_multi_horizon_graph_model(
+                model, test_graphs, device, horizons, delay_threshold
+            )
+            _log_multi_horizon_results(metrics, model_name, horizons)
+        else:
+            metrics = evaluate_graph_model(
+                model, test_graphs, device, delay_threshold
+            )
+            _log_test_results(metrics, model_name)
 
     else:
         # --- Pipeline tabular ---
@@ -176,22 +261,24 @@ def main() -> None:
         test_features, test_targets = splits["test"]
 
         input_dim = test_features.shape[1]
-        model = _build_model(model_name, model_config, input_dim)
+        model = _build_model(config, input_dim)
 
         checkpoint_info = load_checkpoint(args.checkpoint, model)
-        logger.info("Checkpoint cargado: época %d, métricas=%s",
-                    checkpoint_info["epoch"], checkpoint_info["metrics"])
+        logger.info(
+            "Checkpoint cargado: época %d, métricas=%s",
+            checkpoint_info["epoch"], checkpoint_info["metrics"],
+        )
 
         model = model.to(device)
 
         test_dataset = FlightDelayDataset(test_features, test_targets)
         batch_size = config["training"].get("batch_size", 512)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False
+        )
 
         metrics = evaluate_model(model, test_loader, device, delay_threshold)
-
-    # --- Resultados unificados ---
-    _log_test_results(metrics, model_name)
+        _log_test_results(metrics, model_name)
 
     # --- Gráficos opcionales (solo modelos tabulares por ahora) ---
     if args.plots and model_name not in GRAPH_MODELS:

@@ -163,6 +163,89 @@ def compute_unified_metrics(
 
 
 @torch.no_grad()
+def evaluate_multi_horizon_graph_model(
+    model: torch.nn.Module,
+    graphs: list[Data],
+    device: torch.device,
+    prediction_horizons: list[int],
+    delay_threshold: float = 15.0,
+) -> dict[str, dict[str, float]]:
+    """Evalúa un modelo GNN multi-horizonte sobre grafos temporales.
+
+    Calcula métricas unificadas para cada horizonte de predicción
+    y un promedio global.
+
+    Args:
+        model: Modelo GNN multi-horizonte en modo eval.
+        graphs: Lista de grafos PyG con targets [num_nodes, num_horizons].
+        device: Dispositivo (cpu/cuda).
+        prediction_horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
+        delay_threshold: Umbral en minutos para clasificación derivada.
+
+    Returns:
+        Diccionario con métricas por horizonte y promedio:
+        {"horizon_1h": {...}, "horizon_2h": {...}, ..., "average": {...}}
+    """
+    model.eval()
+    num_horizons = len(prediction_horizons)
+
+    # Acumular predicciones y targets por horizonte
+    all_preds: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    all_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+
+    for graph in graphs:
+        x = graph.x.to(device)
+        edge_index = graph.edge_index.to(device)
+        edge_weight = None
+        if graph.edge_attr is not None:
+            edge_weight = graph.edge_attr.squeeze(-1).to(device)
+        mask = graph.active_mask
+
+        # Salida [num_nodes, num_horizons]
+        preds = model(x, edge_index, edge_weight=edge_weight)
+        preds = preds.cpu().numpy()
+
+        targets_np = graph.y.numpy()
+        mask_np = mask.numpy()
+
+        for h_idx in range(num_horizons):
+            all_preds[h_idx].append(preds[mask_np, h_idx])
+            all_targets[h_idx].append(targets_np[mask_np, h_idx])
+
+    if not all_preds[0]:
+        empty = {
+            "mae": 0.0, "rmse": 0.0, "mape": 0.0, "r2": 0.0,
+            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+        }
+        result = {}
+        for h in prediction_horizons:
+            result[f"horizon_{h}h"] = empty.copy()
+        result["average"] = empty.copy()
+        return result
+
+    # Calcular métricas por horizonte
+    result: dict[str, dict[str, float]] = {}
+    all_metrics_for_avg: list[dict[str, float]] = []
+
+    for h_idx, h in enumerate(prediction_horizons):
+        preds_h = np.concatenate(all_preds[h_idx])
+        targets_h = np.concatenate(all_targets[h_idx])
+        metrics_h = compute_unified_metrics(preds_h, targets_h, delay_threshold)
+        result[f"horizon_{h}h"] = metrics_h
+        all_metrics_for_avg.append(metrics_h)
+
+    # Promedio de métricas
+    avg_metrics: dict[str, float] = {}
+    for key in all_metrics_for_avg[0]:
+        avg_metrics[key] = float(
+            np.mean([m[key] for m in all_metrics_for_avg])
+        )
+    result["average"] = avg_metrics
+
+    return result
+
+
+@torch.no_grad()
 def evaluate_graph_model(
     model: torch.nn.Module,
     graphs: list[Data],
