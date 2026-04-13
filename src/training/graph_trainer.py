@@ -23,10 +23,12 @@ class GraphTrainer:
     Args:
         model: Modelo GNN de PyTorch.
         optimizer: Optimizador.
-        criterion: Función de pérdida (MSELoss para regresión).
+        criterion: Función de pérdida para entrenamiento (puede ser ponderada).
         device: Dispositivo (cpu/cuda).
         scheduler: Learning rate scheduler (opcional).
         gradient_clip: Valor máximo de gradiente (0 = sin clip).
+        val_criterion: Función de pérdida para validación. Si None, usa
+            MSELoss estándar para que val_loss sea comparable entre runs.
     """
 
     def __init__(
@@ -37,10 +39,12 @@ class GraphTrainer:
         device: torch.device,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         gradient_clip: float = 0.0,
+        val_criterion: nn.Module | None = None,
     ) -> None:
         self.model = model.to(device)
         self.optimizer = optimizer
         self.criterion = criterion
+        self.val_criterion = val_criterion or nn.MSELoss()
         self.device = device
         self.scheduler = scheduler
         self.gradient_clip = gradient_clip
@@ -111,11 +115,15 @@ class GraphTrainer:
     def validate(self, graphs: list[Data]) -> float:
         """Ejecuta validación sin gradientes.
 
+        Usa val_criterion (MSELoss estándar por defecto) para que las
+        métricas de validación sean comparables independientemente de
+        la función de pérdida usada en entrenamiento.
+
         Args:
             graphs: Lista de grafos temporales de validación.
 
         Returns:
-            Pérdida promedio de validación.
+            Pérdida promedio de validación (MSE estándar).
         """
         self.model.eval()
         total_loss = 0.0
@@ -127,7 +135,7 @@ class GraphTrainer:
             if mask.sum() == 0:
                 continue
 
-            loss = self.criterion(logits[mask], targets[mask])
+            loss = self.val_criterion(logits[mask], targets[mask])
             total_loss += loss.item()
             n_graphs += 1
 
