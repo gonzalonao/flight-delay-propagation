@@ -48,6 +48,9 @@ class GraphTrainer:
     def _process_graph(self, graph: Data) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Mueve un grafo al dispositivo y extrae componentes.
 
+        Maneja tanto targets single-horizon [num_nodes] como
+        multi-horizonte [num_nodes, num_horizons].
+
         Returns:
             Tupla de (logits, targets, active_mask) para nodos activos.
         """
@@ -59,7 +62,12 @@ class GraphTrainer:
         y = graph.y.to(self.device)
         active_mask = graph.active_mask.to(self.device)
 
-        logits = self.model(x, edge_index, edge_weight=edge_weight).squeeze(-1)
+        logits = self.model(x, edge_index, edge_weight=edge_weight)
+
+        # Single-horizon: squeeze [N, 1] -> [N] para compatibilidad
+        # Multi-horizon: mantener [N, H]
+        if logits.dim() == 2 and logits.shape[1] == 1:
+            logits = logits.squeeze(-1)
 
         return logits, y, active_mask
 

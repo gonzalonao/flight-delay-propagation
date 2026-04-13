@@ -1,0 +1,91 @@
+# =============================================================================
+# Configuración MultiHorizonGAT - Predicción multi-horizonte
+# =============================================================================
+# Uso: python scripts/train.py --config configs/multi_horizon_gat.yaml
+#
+# Cambios respecto a v1:
+#   - sample_frac: 0.1 → 0.3 (más datos para aprender patrones temporales)
+#   - temporal_window_hours: 1 → 2 (más vuelos por snapshot)
+#   - normalize_features: true (zero-mean, unit-variance en node features)
+#   - loss: weighted_mse (penaliza más los errores en aeropuertos retrasados)
+#   - learning_rate: 0.001 → 0.0005 (más estable para atención multi-cabeza)
+#   - epochs: 30 → 100, patience: 10 → 20 (más tiempo para converger)
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  years: [2018]
+  sample_frac: 0.3
+  random_seed: 42
+  columns:
+    - FlightDate
+    - Airline
+    - Origin
+    - Dest
+    - CRSDepTime
+    - DepDelay
+    - ArrDelay
+    - Distance
+    - Cancelled
+    - Diverted
+    - AirTime
+    - Month
+    - DayOfWeek
+    - DayofMonth
+
+features:
+  target: ArrDelay
+  temporal:
+    - month
+    - day_of_week
+    - hour
+  categorical:
+    - Airline
+    - Origin
+    - Dest
+  numerical:
+    - Distance
+    - DepDelay
+    - AirTime
+
+split:
+  method: temporal
+  train_months: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  val_months: [10, 11]
+  test_months: [12]
+
+graph:
+  top_n_airports: 30
+  min_route_flights: 50
+  temporal_window_hours: 2
+  input_window: 6
+  prediction_horizons: [1, 2, 3, 4, 5]
+  normalize_features: true
+
+model:
+  name: multi_horizon_gat
+  multi_horizon_gat:
+    hidden_channels: 64
+    num_heads: 4
+    num_layers: 3
+    dropout: 0.3
+
+training:
+  epochs: 100
+  batch_size: 512
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  scheduler: cosine
+  patience: 20
+  gradient_clip: 1.0
+  num_workers: 4
+  loss: weighted_mse
+  delay_weight: 3.0
+
+evaluation:
+  metrics: [mae, rmse, mape, r2]
+  delay_threshold_minutes: 15
+
+reproducibility:
+  seed: 42
+  deterministic: true

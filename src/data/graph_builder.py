@@ -189,6 +189,48 @@ def compute_node_targets(
     return torch.nan_to_num(targets, nan=0.0)
 
 
+def compute_multi_horizon_targets(
+    df: pd.DataFrame,
+    airport_map: dict[str, int],
+    current_end: pd.Timestamp,
+    window_delta: pd.Timedelta,
+    horizons: list[int],
+) -> torch.Tensor | None:
+    """Genera targets multi-horizonte: retraso promedio a N ventanas futuras.
+
+    Para cada horizonte h en horizons, calcula el retraso promedio de
+    salida en la ventana [current_end + (h-1)*delta, current_end + h*delta).
+
+    Args:
+        df: DataFrame completo con columna 'timestamp'.
+        airport_map: Mapeo de código IATA a índice.
+        current_end: Fin de la ventana actual de features.
+        window_delta: Duración de cada ventana temporal.
+        horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
+
+    Returns:
+        Tensor [num_nodes, num_horizons] o None si algún horizonte
+        no tiene datos suficientes.
+    """
+    num_nodes = len(airport_map)
+    num_horizons = len(horizons)
+    targets = torch.zeros(num_nodes, num_horizons, dtype=torch.float32)
+
+    for h_idx, h in enumerate(horizons):
+        h_start = current_end + (h - 1) * window_delta
+        h_end = current_end + h * window_delta
+        h_mask = (df["timestamp"] >= h_start) & (df["timestamp"] < h_end)
+        h_df = df[h_mask]
+
+        if len(h_df) < 10:
+            return None
+
+        h_targets = compute_node_targets(h_df, airport_map)
+        targets[:, h_idx] = h_targets
+
+    return targets
+
+
 def create_temporal_graphs(
     df: pd.DataFrame,
     airport_map: dict[str, int],
@@ -196,13 +238,18 @@ def create_temporal_graphs(
     edge_weight: torch.Tensor,
     window_hours: int = 1,
     delay_threshold: float = 15.0,
+    prediction_horizons: list[int] | None = None,
 ) -> list[Data]:
     """Crea snapshots de grafos temporales a partir de datos de vuelos.
 
     Divide los datos en ventanas temporales y genera un grafo por ventana.
     Las features de cada nodo son las estadísticas de retraso del aeropuerto
-    en esa ventana. El target es si el aeropuerto estará retrasado en la
-    ventana siguiente.
+    en esa ventana. El target es el retraso promedio en ventanas futuras.
+
+    Cuando prediction_horizons es None o [1], genera targets single-horizon
+    [num_nodes] (compatible con BasicGCN). Cuando tiene múltiples valores
+    (e.g., [1, 2, 3, 4, 5]), genera targets multi-horizonte [num_nodes,
+    num_horizons] para MultiHorizonGAT.
 
     Args:
         df: DataFrame preprocesado con FlightDate y Hour.
@@ -211,10 +258,16 @@ def create_temporal_graphs(
         edge_weight: Pesos de aristas [num_edges].
         window_hours: Horas por ventana temporal.
         delay_threshold: Umbral de retraso en minutos.
+        prediction_horizons: Lista de horizontes futuros (e.g., [1,2,3,4,5]).
+            None o [1] usa modo single-horizon (retrocompatible).
 
     Returns:
         Lista de objetos Data de PyG (un grafo por ventana).
     """
+    multi_horizon = (
+        prediction_horizons is not None and len(prediction_horizons) > 1
+    )
+
     # Crear timestamp combinando FlightDate + Hour
     df = df.copy()
     if "Hour" not in df.columns:
@@ -232,10 +285,17 @@ def create_temporal_graphs(
     max_time = df["timestamp"].max()
     window_delta = pd.Timedelta(hours=window_hours)
 
+    # Calcular cuántas ventanas futuras necesitamos
+    if multi_horizon:
+        max_horizon = max(prediction_horizons)
+        lookahead = max_horizon * window_delta
+    else:
+        lookahead = window_delta
+
     graphs = []
     current_time = min_time
 
-    while current_time + 2 * window_delta <= max_time:
+    while current_time + window_delta + lookahead <= max_time:
         # Ventana actual (features)
         window_mask = (
             (df["timestamp"] >= current_time)
@@ -243,40 +303,115 @@ def create_temporal_graphs(
         )
         window_df = df[window_mask]
 
-        # Ventana siguiente (targets)
-        next_mask = (
-            (df["timestamp"] >= current_time + window_delta)
-            & (df["timestamp"] < current_time + 2 * window_delta)
-        )
-        next_df = df[next_mask]
+        if len(window_df) < 10:
+            current_time += window_delta
+            continue
 
-        # Solo crear grafo si ambas ventanas tienen datos suficientes
-        if len(window_df) >= 10 and len(next_df) >= 10:
-            node_features = compute_node_features(
-                window_df, airport_map, delay_threshold
+        current_end = current_time + window_delta
+
+        if multi_horizon:
+            # Targets multi-horizonte: [num_nodes, num_horizons]
+            node_targets = compute_multi_horizon_targets(
+                df, airport_map, current_end, window_delta,
+                prediction_horizons,
             )
+            if node_targets is None:
+                current_time += window_delta
+                continue
+        else:
+            # Targets single-horizon: [num_nodes] (retrocompatible)
+            next_mask = (
+                (df["timestamp"] >= current_end)
+                & (df["timestamp"] < current_end + window_delta)
+            )
+            next_df = df[next_mask]
+
+            if len(next_df) < 10:
+                current_time += window_delta
+                continue
+
             node_targets = compute_node_targets(next_df, airport_map)
 
-            # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
-            active_mask = node_features.abs().sum(dim=1) > 0
+        node_features = compute_node_features(
+            window_df, airport_map, delay_threshold
+        )
 
-            graph = Data(
-                x=node_features,
-                edge_index=edge_index,
-                edge_attr=edge_weight.unsqueeze(-1),
-                y=node_targets,
-                active_mask=active_mask,
-            )
-            graphs.append(graph)
+        # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
+        active_mask = node_features.abs().sum(dim=1) > 0
+
+        graph = Data(
+            x=node_features,
+            edge_index=edge_index,
+            edge_attr=edge_weight.unsqueeze(-1),
+            y=node_targets,
+            active_mask=active_mask,
+        )
+        graphs.append(graph)
 
         current_time += window_delta
 
+    horizons_str = str(prediction_horizons) if multi_horizon else "[1]"
     logger.info(
-        "Snapshots temporales creados: %d grafos (ventana=%dh, umbral=%d min)",
-        len(graphs), window_hours, delay_threshold,
+        "Snapshots temporales creados: %d grafos (ventana=%dh, "
+        "horizontes=%s, umbral=%d min)",
+        len(graphs), window_hours, horizons_str, delay_threshold,
     )
 
     return graphs
+
+
+def normalize_graph_features(
+    graphs: list[Data],
+    train_indices: list[int] | None = None,
+) -> tuple[list[Data], dict[str, torch.Tensor]]:
+    """Normaliza las node features de los grafos (zero-mean, unit-variance).
+
+    Calcula media y desviación estándar solo sobre los nodos activos
+    de los grafos de entrenamiento, y aplica la normalización a todos
+    los grafos. Esto evita fuga de información del conjunto de test.
+
+    Args:
+        graphs: Lista completa de grafos PyG.
+        train_indices: Índices de los grafos de entrenamiento para
+            calcular estadísticas. Si None, usa todos los grafos.
+
+    Returns:
+        Tupla de (grafos normalizados, estadísticas {mean, std}).
+    """
+    if not graphs:
+        return graphs, {"mean": torch.zeros(1), "std": torch.ones(1)}
+
+    # Recopilar features de nodos activos para calcular estadísticas
+    train_idxs = train_indices if train_indices is not None else range(len(graphs))
+    all_features = []
+    for i in train_idxs:
+        g = graphs[i]
+        mask = g.active_mask
+        if mask.sum() > 0:
+            all_features.append(g.x[mask])
+
+    if not all_features:
+        return graphs, {"mean": torch.zeros(1), "std": torch.ones(1)}
+
+    stacked = torch.cat(all_features, dim=0)
+    mean = stacked.mean(dim=0)
+    std = stacked.std(dim=0)
+    # Evitar división por cero
+    std = torch.clamp(std, min=1e-6)
+
+    # Aplicar normalización a todos los grafos
+    normalized = []
+    for g in graphs:
+        g_new = g.clone()
+        g_new.x = (g.x - mean) / std
+        normalized.append(g_new)
+
+    logger.info(
+        "Features normalizadas: media=%s, std=%s",
+        mean.numpy().round(2), std.numpy().round(2),
+    )
+
+    return normalized, {"mean": mean, "std": std}
 
 
 def build_graph_dataset(
@@ -305,6 +440,8 @@ def build_graph_dataset(
     window_hours = graph_config.get("temporal_window_hours", 1)
     delay_threshold = eval_config.get("delay_threshold_minutes", 15)
 
+    prediction_horizons = graph_config.get("prediction_horizons")
+
     graphs = create_temporal_graphs(
         df=df,
         airport_map=airport_map,
@@ -312,7 +449,16 @@ def build_graph_dataset(
         edge_weight=edge_weight,
         window_hours=window_hours,
         delay_threshold=delay_threshold,
+        prediction_horizons=prediction_horizons,
     )
+
+    # Normalizar features usando solo estadísticas de entrenamiento
+    normalize = graph_config.get("normalize_features", False)
+    if normalize and graphs:
+        n = len(graphs)
+        train_end = int(n * 0.7)
+        train_indices = list(range(train_end))
+        graphs, _ = normalize_graph_features(graphs, train_indices)
 
     return graphs, airport_map
 
