@@ -82,6 +82,7 @@ training:
   num_workers: 4
   loss: weighted_mse
   delay_weight: 2.0
+  horizon_weights: [5, 4, 3, 2, 1]  # Más peso a horizontes cercanos
 
 evaluation:
   metrics: [mae, rmse, mape, r2]
