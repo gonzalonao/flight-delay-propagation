@@ -25,7 +25,7 @@ class WeightedMSELoss(nn.Module):
     def __init__(
         self,
         high_delay_threshold: float = 15.0,
-        high_delay_weight: float = 3.0,
+        high_delay_weight: float = 2.0,
     ) -> None:
         super().__init__()
         self.threshold = high_delay_threshold

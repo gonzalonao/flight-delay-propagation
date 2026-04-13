@@ -7,9 +7,10 @@
 #   - sample_frac: 0.1 → 0.3 (más datos para aprender patrones temporales)
 #   - temporal_window_hours: 1 → 2 (más vuelos por snapshot)
 #   - normalize_features: true (zero-mean, unit-variance en node features)
-#   - loss: weighted_mse (penaliza más los errores en aeropuertos retrasados)
+#   - loss: weighted_mse con peso 2.0 (penaliza más errores en aeropuertos retrasados)
 #   - learning_rate: 0.001 → 0.0005 (más estable para atención multi-cabeza)
 #   - epochs: 30 → 100, patience: 10 → 20 (más tiempo para converger)
+#   - Validación con MSE estándar (no ponderado) para métricas comparables
 
 data:
   raw_dir: data/raw
@@ -80,7 +81,7 @@ training:
   gradient_clip: 1.0
   num_workers: 4
   loss: weighted_mse
-  delay_weight: 3.0
+  delay_weight: 2.0
 
 evaluation:
   metrics: [mae, rmse, mape, r2]
