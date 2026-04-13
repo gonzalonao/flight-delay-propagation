@@ -327,14 +327,17 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
         delay_threshold = config.get("evaluation", {}).get(
             "delay_threshold_minutes", 15
         )
-        delay_weight = training_config.get("delay_weight", 3.0)
+        delay_weight = training_config.get("delay_weight", 2.0)
+        horizon_weights = training_config.get("horizon_weights")
         criterion = WeightedMSELoss(
             high_delay_threshold=delay_threshold,
             high_delay_weight=delay_weight,
+            horizon_weights=horizon_weights,
         )
+        hw_str = f", horizon_weights={horizon_weights}" if horizon_weights else ""
         logger.info(
-            "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f)",
-            delay_threshold, delay_weight,
+            "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f%s)",
+            delay_threshold, delay_weight, hw_str,
         )
     else:
         criterion = torch.nn.MSELoss()
