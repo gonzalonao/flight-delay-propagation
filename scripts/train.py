@@ -35,6 +35,7 @@ from src.evaluation.metrics import (
 from src.models.basic_gcn import BasicGCN
 from src.models.dense_nn import DenseNN
 from src.models.multi_horizon_gat import MultiHorizonGAT
+from src.models.seq2seq_gnn import Seq2SeqGNN
 from src.models.spatiotemporal_gnn import SpatioTemporalGNN
 from src.training.graph_trainer import GraphTrainer, SequenceGraphTrainer
 from src.training.losses import WeightedMSELoss
@@ -52,16 +53,21 @@ MODEL_REGISTRY = {
     "basic_gcn": BasicGCN,
     "multi_horizon_gat": MultiHorizonGAT,
     "spatiotemporal_gnn": SpatioTemporalGNN,
+    "seq2seq_gnn": Seq2SeqGNN,
 }
 
 # Modelos que usan grafos PyG en vez de datos tabulares
-GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn"}
+GRAPH_MODELS = {
+    "basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
+}
 
 # Modelos que producen targets multi-horizonte
-MULTI_HORIZON_MODELS = {"multi_horizon_gat", "spatiotemporal_gnn"}
+MULTI_HORIZON_MODELS = {
+    "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
+}
 
 # Modelos que procesan secuencias de grafos temporales
-SEQUENCE_MODELS = {"spatiotemporal_gnn"}
+SEQUENCE_MODELS = {"spatiotemporal_gnn", "seq2seq_gnn"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,6 +129,19 @@ def build_model(config: dict, input_dim: int) -> torch.nn.Module:
         graph_config = config.get("graph", {})
         horizons = graph_config.get("prediction_horizons", [1, 2, 3, 4, 5])
         return SpatioTemporalGNN(
+            input_dim=input_dim,
+            gnn_hidden=model_config.get("gnn_hidden", 64),
+            lstm_hidden=model_config.get("lstm_hidden", 128),
+            num_heads=model_config.get("num_heads", 4),
+            num_gnn_layers=model_config.get("num_gnn_layers", 2),
+            num_horizons=len(horizons),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
+    if model_name == "seq2seq_gnn":
+        graph_config = config.get("graph", {})
+        horizons = graph_config.get("prediction_horizons", [1, 2, 3, 4, 5])
+        return Seq2SeqGNN(
             input_dim=input_dim,
             gnn_hidden=model_config.get("gnn_hidden", 64),
             lstm_hidden=model_config.get("lstm_hidden", 128),
