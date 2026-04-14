@@ -246,6 +246,93 @@ def evaluate_multi_horizon_graph_model(
 
 
 @torch.no_grad()
+def evaluate_multi_horizon_sequence_model(
+    model: torch.nn.Module,
+    sequences: list[list[Data]],
+    device: torch.device,
+    prediction_horizons: list[int],
+    delay_threshold: float = 15.0,
+) -> dict[str, dict[str, float]]:
+    """Evalúa un modelo de secuencias multi-horizonte (SpatioTemporalGNN).
+
+    Igual que ``evaluate_multi_horizon_graph_model`` pero opera sobre
+    secuencias de grafos en vez de grafos individuales. Los targets y la
+    máscara se toman del último grafo de cada secuencia.
+
+    Args:
+        model: Modelo que acepta ``list[Data]`` (ya en device).
+        sequences: Lista de secuencias, cada una es ``list[Data]``.
+        device: Dispositivo (cpu/cuda).
+        prediction_horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
+        delay_threshold: Umbral en minutos para clasificación derivada.
+
+    Returns:
+        Diccionario con métricas por horizonte y promedio:
+        {"horizon_1h": {...}, ..., "average": {...}}
+    """
+    model.eval()
+    num_horizons = len(prediction_horizons)
+
+    all_preds: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    all_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+
+    for sequence in sequences:
+        # Move each graph in the sequence to device
+        seq_on_device = []
+        for g in sequence:
+            g_dev = g.clone()
+            g_dev.x = g.x.to(device)
+            g_dev.edge_index = g.edge_index.to(device)
+            if g.edge_attr is not None:
+                g_dev.edge_attr = g.edge_attr.to(device)
+            if g.y is not None:
+                g_dev.y = g.y.to(device)
+            if g.active_mask is not None:
+                g_dev.active_mask = g.active_mask.to(device)
+            seq_on_device.append(g_dev)
+
+        preds = model(seq_on_device).cpu().numpy()
+
+        last_graph = sequence[-1]
+        targets_np = last_graph.y.numpy()
+        mask_np = last_graph.active_mask.numpy()
+
+        for h_idx in range(num_horizons):
+            all_preds[h_idx].append(preds[mask_np, h_idx])
+            all_targets[h_idx].append(targets_np[mask_np, h_idx])
+
+    if not all_preds[0]:
+        empty = {
+            "mae": 0.0, "rmse": 0.0, "mape": 0.0, "r2": 0.0,
+            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+        }
+        result = {}
+        for h in prediction_horizons:
+            result[f"horizon_{h}h"] = empty.copy()
+        result["average"] = empty.copy()
+        return result
+
+    result: dict[str, dict[str, float]] = {}
+    all_metrics_for_avg: list[dict[str, float]] = []
+
+    for h_idx, h in enumerate(prediction_horizons):
+        preds_h = np.concatenate(all_preds[h_idx])
+        targets_h = np.concatenate(all_targets[h_idx])
+        metrics_h = compute_unified_metrics(preds_h, targets_h, delay_threshold)
+        result[f"horizon_{h}h"] = metrics_h
+        all_metrics_for_avg.append(metrics_h)
+
+    avg_metrics: dict[str, float] = {}
+    for key in all_metrics_for_avg[0]:
+        avg_metrics[key] = float(
+            np.mean([m[key] for m in all_metrics_for_avg])
+        )
+    result["average"] = avg_metrics
+
+    return result
+
+
+@torch.no_grad()
 def evaluate_graph_model(
     model: torch.nn.Module,
     graphs: list[Data],

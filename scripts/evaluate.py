@@ -18,13 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import FlightDelayDataset, create_splits, get_feature_columns
 from src.data.features import build_feature_matrix
-from src.data.graph_builder import build_graph_dataset, split_graphs_temporal
+from src.data.graph_builder import (
+    build_graph_dataset,
+    create_temporal_sequences,
+    split_graphs_temporal,
+)
 from src.data.loader import load_flight_data
 from src.data.preprocessing import preprocess_pipeline
 from src.evaluation.metrics import (
     evaluate_graph_model,
     evaluate_model,
     evaluate_multi_horizon_graph_model,
+    evaluate_multi_horizon_sequence_model,
 )
 from src.evaluation.visualization import (
     plot_error_distribution,
@@ -33,13 +38,15 @@ from src.evaluation.visualization import (
 from src.models.basic_gcn import BasicGCN
 from src.models.dense_nn import DenseNN
 from src.models.multi_horizon_gat import MultiHorizonGAT
+from src.models.spatiotemporal_gnn import SpatioTemporalGNN
 from src.utils.config import load_config
 from src.utils.io import get_data_dir, load_checkpoint
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
 
-GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat"}
-MULTI_HORIZON_MODELS = {"multi_horizon_gat"}
+GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn"}
+MULTI_HORIZON_MODELS = {"multi_horizon_gat", "spatiotemporal_gnn"}
+SEQUENCE_MODELS = {"spatiotemporal_gnn"}
 
 logger = setup_logger(__name__)
 
@@ -176,6 +183,20 @@ def _build_model(config: dict, input_dim: int) -> torch.nn.Module:
             dropout=model_config.get("dropout", 0.3),
         )
 
+    if model_name == "spatiotemporal_gnn":
+        horizons = config.get("graph", {}).get(
+            "prediction_horizons", [1, 2, 3, 4, 5]
+        )
+        return SpatioTemporalGNN(
+            input_dim=input_dim,
+            gnn_hidden=model_config.get("gnn_hidden", 64),
+            lstm_hidden=model_config.get("lstm_hidden", 128),
+            num_heads=model_config.get("num_heads", 4),
+            num_gnn_layers=model_config.get("num_gnn_layers", 2),
+            num_horizons=len(horizons),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
     raise ValueError(f"Modelo no reconocido: {model_name}")
 
 
@@ -238,7 +259,25 @@ def main() -> None:
 
         model = model.to(device)
 
-        if is_multi_horizon:
+        if model_name in SEQUENCE_MODELS:
+            input_window = config.get("graph", {}).get("input_window", 6)
+            test_sequences = create_temporal_sequences(
+                test_graphs, input_window
+            )
+            if not test_sequences:
+                logger.error(
+                    "No hay secuencias de test (grafos=%d, window=%d).",
+                    len(test_graphs), input_window,
+                )
+                return
+            horizons = config.get("graph", {}).get(
+                "prediction_horizons", [1, 2, 3, 4, 5]
+            )
+            metrics = evaluate_multi_horizon_sequence_model(
+                model, test_sequences, device, horizons, delay_threshold
+            )
+            _log_multi_horizon_results(metrics, model_name, horizons)
+        elif is_multi_horizon:
             horizons = config.get("graph", {}).get(
                 "prediction_horizons", [1, 2, 3, 4, 5]
             )

@@ -19,18 +19,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import FlightDelayDataset, create_splits, get_feature_columns
 from src.data.features import build_feature_matrix
-from src.data.graph_builder import build_graph_dataset, split_graphs_temporal
+from src.data.graph_builder import (
+    build_graph_dataset,
+    create_temporal_sequences,
+    split_graphs_temporal,
+)
 from src.data.loader import load_flight_data
 from src.data.preprocessing import preprocess_pipeline
 from src.evaluation.metrics import (
     evaluate_graph_model,
     evaluate_model,
     evaluate_multi_horizon_graph_model,
+    evaluate_multi_horizon_sequence_model,
 )
 from src.models.basic_gcn import BasicGCN
 from src.models.dense_nn import DenseNN
 from src.models.multi_horizon_gat import MultiHorizonGAT
-from src.training.graph_trainer import GraphTrainer
+from src.models.spatiotemporal_gnn import SpatioTemporalGNN
+from src.training.graph_trainer import GraphTrainer, SequenceGraphTrainer
 from src.training.losses import WeightedMSELoss
 from src.training.trainer import Trainer
 from src.utils.config import load_config
@@ -45,13 +51,17 @@ MODEL_REGISTRY = {
     "dense_nn": DenseNN,
     "basic_gcn": BasicGCN,
     "multi_horizon_gat": MultiHorizonGAT,
+    "spatiotemporal_gnn": SpatioTemporalGNN,
 }
 
 # Modelos que usan grafos PyG en vez de datos tabulares
-GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat"}
+GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn"}
 
 # Modelos que producen targets multi-horizonte
-MULTI_HORIZON_MODELS = {"multi_horizon_gat"}
+MULTI_HORIZON_MODELS = {"multi_horizon_gat", "spatiotemporal_gnn"}
+
+# Modelos que procesan secuencias de grafos temporales
+SEQUENCE_MODELS = {"spatiotemporal_gnn"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,6 +115,19 @@ def build_model(config: dict, input_dim: int) -> torch.nn.Module:
             hidden_channels=model_config.get("hidden_channels", 64),
             num_heads=model_config.get("num_heads", 4),
             num_layers=model_config.get("num_layers", 3),
+            num_horizons=len(horizons),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
+    if model_name == "spatiotemporal_gnn":
+        graph_config = config.get("graph", {})
+        horizons = graph_config.get("prediction_horizons", [1, 2, 3, 4, 5])
+        return SpatioTemporalGNN(
+            input_dim=input_dim,
+            gnn_hidden=model_config.get("gnn_hidden", 64),
+            lstm_hidden=model_config.get("lstm_hidden", 128),
+            num_heads=model_config.get("num_heads", 4),
+            num_gnn_layers=model_config.get("num_gnn_layers", 2),
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
         )
@@ -386,6 +409,117 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 
 
+def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
+    """Pipeline de entrenamiento para modelos de secuencias de grafos.
+
+    Para modelos como SpatioTemporalGNN que procesan secuencias de
+    snapshots temporales consecutivos (e.g., 6 horas de historia).
+    """
+    model_name = config["model"]["name"]
+
+    # Construir grafos temporales (multi-horizonte)
+    graphs, airport_map = build_graph_dataset(df, airports, config)
+    graph_splits = split_graphs_temporal(graphs)
+
+    # Crear secuencias por split (evita fuga entre conjuntos)
+    input_window = config.get("graph", {}).get("input_window", 6)
+    train_sequences = create_temporal_sequences(
+        graph_splits["train"], input_window
+    )
+    val_sequences = create_temporal_sequences(
+        graph_splits["val"], input_window
+    )
+
+    if not train_sequences:
+        logger.error(
+            "No hay secuencias de entrenamiento. Revisa los datos y "
+            "la configuración (input_window=%d, grafos_train=%d).",
+            input_window, len(graph_splits["train"]),
+        )
+        return
+
+    logger.info(
+        "Secuencias: train=%d, val=%d (input_window=%d)",
+        len(train_sequences), len(val_sequences), input_window,
+    )
+
+    # El input_dim viene de las node features del primer grafo
+    input_dim = train_sequences[0][0].x.shape[1]
+    model = build_model(config, input_dim)
+    logger.info(
+        "Modelo: %s | Parámetros: %d | Nodos: %d | Secuencia: %d grafos",
+        model_name,
+        sum(p.numel() for p in model.parameters()),
+        len(airport_map),
+        input_window,
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("Dispositivo: %s", device)
+
+    training_config = config["training"]
+    optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
+
+    # Seleccionar función de pérdida (misma lógica que _train_graph)
+    loss_config = training_config.get("loss", "mse")
+    if loss_config == "weighted_mse":
+        delay_threshold = config.get("evaluation", {}).get(
+            "delay_threshold_minutes", 15
+        )
+        delay_weight = training_config.get("delay_weight", 2.0)
+        horizon_weights = training_config.get("horizon_weights")
+        criterion = WeightedMSELoss(
+            high_delay_threshold=delay_threshold,
+            high_delay_weight=delay_weight,
+            horizon_weights=horizon_weights,
+        )
+        hw_str = f", horizon_weights={horizon_weights}" if horizon_weights else ""
+        logger.info(
+            "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f%s)",
+            delay_threshold, delay_weight, hw_str,
+        )
+    else:
+        criterion = torch.nn.MSELoss()
+
+    output_dir = get_output_dir()
+    checkpoint_path = str(output_dir / f"best_{model_name}.pt")
+
+    trainer = SequenceGraphTrainer(
+        model=model,
+        optimizer=optimizer,
+        criterion=criterion,
+        device=device,
+        scheduler=scheduler,
+        gradient_clip=training_config.get("gradient_clip", 1.0),
+    )
+
+    trainer.fit(
+        train_sequences=train_sequences,
+        val_sequences=val_sequences,
+        epochs=training_config.get("epochs", 100),
+        patience=training_config.get("patience", 15),
+        checkpoint_path=checkpoint_path,
+    )
+
+    # Evaluación final sobre secuencias de test
+    test_sequences = create_temporal_sequences(
+        graph_splits["test"], input_window
+    )
+    if test_sequences:
+        delay_threshold = config.get("evaluation", {}).get(
+            "delay_threshold_minutes", 15
+        )
+        horizons = config.get("graph", {}).get(
+            "prediction_horizons", [1, 2, 3, 4, 5]
+        )
+        metrics = evaluate_multi_horizon_sequence_model(
+            model, test_sequences, device, horizons, delay_threshold
+        )
+        _log_multi_horizon_results(metrics, model_name, horizons)
+
+    logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
+
+
 def main() -> None:
     """Punto de entrada principal del entrenamiento."""
     args = parse_args()
@@ -418,7 +552,9 @@ def main() -> None:
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
 
     # --- Entrenar según tipo de modelo ---
-    if model_name in GRAPH_MODELS:
+    if model_name in SEQUENCE_MODELS:
+        _train_sequence_graph(config, df, airports)
+    elif model_name in GRAPH_MODELS:
         _train_graph(config, df, airports)
     else:
         _train_tabular(config, df, airports)
