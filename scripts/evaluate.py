@@ -38,15 +38,20 @@ from src.evaluation.visualization import (
 from src.models.basic_gcn import BasicGCN
 from src.models.dense_nn import DenseNN
 from src.models.multi_horizon_gat import MultiHorizonGAT
+from src.models.seq2seq_gnn import Seq2SeqGNN
 from src.models.spatiotemporal_gnn import SpatioTemporalGNN
 from src.utils.config import load_config
 from src.utils.io import get_data_dir, load_checkpoint
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
 
-GRAPH_MODELS = {"basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn"}
-MULTI_HORIZON_MODELS = {"multi_horizon_gat", "spatiotemporal_gnn"}
-SEQUENCE_MODELS = {"spatiotemporal_gnn"}
+GRAPH_MODELS = {
+    "basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
+}
+MULTI_HORIZON_MODELS = {
+    "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
+}
+SEQUENCE_MODELS = {"spatiotemporal_gnn", "seq2seq_gnn"}
 
 logger = setup_logger(__name__)
 
@@ -188,6 +193,20 @@ def _build_model(config: dict, input_dim: int) -> torch.nn.Module:
             "prediction_horizons", [1, 2, 3, 4, 5]
         )
         return SpatioTemporalGNN(
+            input_dim=input_dim,
+            gnn_hidden=model_config.get("gnn_hidden", 64),
+            lstm_hidden=model_config.get("lstm_hidden", 128),
+            num_heads=model_config.get("num_heads", 4),
+            num_gnn_layers=model_config.get("num_gnn_layers", 2),
+            num_horizons=len(horizons),
+            dropout=model_config.get("dropout", 0.3),
+        )
+
+    if model_name == "seq2seq_gnn":
+        horizons = config.get("graph", {}).get(
+            "prediction_horizons", [1, 2, 3, 4, 5]
+        )
+        return Seq2SeqGNN(
             input_dim=input_dim,
             gnn_hidden=model_config.get("gnn_hidden", 64),
             lstm_hidden=model_config.get("lstm_hidden", 128),

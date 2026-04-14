@@ -56,7 +56,7 @@ graph:
   prediction_horizons: [1, 2, 3, 4, 5]  # Horas futuras a predecir
 
 model:
-  name: dense_nn                 # dense_nn | lstm | basic_gcn | multi_horizon_gat | spatiotemporal_gnn
+  name: dense_nn                 # dense_nn | lstm | basic_gcn | multi_horizon_gat | spatiotemporal_gnn | seq2seq_gnn
   dense_nn:
     hidden_dims: [256, 128, 64]
     dropout: 0.3
@@ -76,6 +76,12 @@ model:
     num_layers: 3
     dropout: 0.3
   spatiotemporal_gnn:
+    gnn_hidden: 64
+    lstm_hidden: 128
+    num_heads: 4
+    num_gnn_layers: 2
+    dropout: 0.3
+  seq2seq_gnn:
     gnn_hidden: 64
     lstm_hidden: 128
     num_heads: 4
