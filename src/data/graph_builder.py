@@ -495,3 +495,48 @@ def split_graphs_temporal(
         logger.info("Graph split %s: %d grafos", name, len(split))
 
     return splits
+
+
+def create_temporal_sequences(
+    graphs: list[Data],
+    input_window: int = 6,
+) -> list[list[Data]]:
+    """Agrupa grafos consecutivos en secuencias temporales para modelos LSTM.
+
+    Crea ventanas deslizantes de tamaño ``input_window`` con paso 1 sobre
+    una lista de grafos ya pertenecientes a un mismo split (train, val o
+    test). El target de cada secuencia es ``sequence[-1].y`` (targets del
+    último grafo).
+
+    Debe llamarse DESPUÉS de ``split_graphs_temporal()`` sobre cada split
+    por separado para evitar fuga de información entre conjuntos.
+
+    Args:
+        graphs: Lista de grafos PyG de un solo split, ordenados
+            temporalmente.
+        input_window: Número de snapshots consecutivos por secuencia.
+
+    Returns:
+        Lista de secuencias, donde cada secuencia es una lista de
+        ``input_window`` objetos Data. Vacía si hay menos grafos que
+        ``input_window``.
+    """
+    if len(graphs) < input_window:
+        logger.warning(
+            "Solo %d grafos disponibles, se necesitan %d para formar "
+            "secuencias. Retornando lista vacía.",
+            len(graphs), input_window,
+        )
+        return []
+
+    sequences = [
+        graphs[i : i + input_window]
+        for i in range(len(graphs) - input_window + 1)
+    ]
+
+    logger.info(
+        "Secuencias temporales creadas: %d secuencias (ventana=%d grafos)",
+        len(sequences), input_window,
+    )
+
+    return sequences
