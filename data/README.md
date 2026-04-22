@@ -47,5 +47,7 @@ data/
 These files are **very large**. Never load an entire file into memory at once:
 - Use `pd.read_parquet(path, columns=[...])` to read only needed columns
 - Process one year at a time
-- Use `sample_frac` in the config for development (default: 10%)
+- Set `data.sample_frac` in the config to a fraction (e.g. `0.1`) durante
+  desarrollo si necesitas iterar rápido. Por defecto está en `null` —
+  carga los dos años completos.
 - See `src/data/loader.py` for memory-safe loading functions

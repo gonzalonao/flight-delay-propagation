@@ -13,8 +13,8 @@
 data:
   raw_dir: data/raw
   processed_dir: data/processed
-  years: [2018]
-  sample_frac: 0.3
+  years: [2018, 2019]
+  sample_frac: null
   random_seed: 42
   # Ver `configs/default.yaml` para la justificación del agrupamiento
   # Class A (schedule) vs Class B (actuals) y la nota sobre BTS.
@@ -72,8 +72,8 @@ split:
   test_months: [12]
 
 graph:
-  top_n_airports: 30
-  min_route_flights: 50
+  top_n_airports: 70
+  min_route_flights: 30
   temporal_window_hours: 2
   input_window: 6
   prediction_horizons: [1, 2, 3, 4, 5]
