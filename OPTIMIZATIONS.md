@@ -39,7 +39,7 @@
 - [ ] mean_scheduled_distance_norm
 
 ## Targets
-- [ ] Primary target: DepDelay → ArrDelay
+- [x] Primary target: DepDelay → ArrDelay  // applied in commit D; agrupado por Dest, ventana del target keada por arr_timestamp (CRSArrTime)
 - [ ] Add classification head: pct_arr_delayed_15
 - [ ] Add auxiliary regression head: DepDelay (multi-task, λ=0.3)
 

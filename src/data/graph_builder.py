@@ -159,19 +159,22 @@ def compute_node_targets(
     window_df: pd.DataFrame,
     airport_map: dict[str, int],
 ) -> torch.Tensor:
-    """Genera targets continuos: retraso promedio de salida por aeropuerto.
+    """Genera targets continuos: retraso promedio de LLEGADA por aeropuerto.
 
-    Calcula el retraso promedio (en minutos) de los vuelos que salen de
-    cada aeropuerto en la ventana temporal futura. Esto permite evaluar
-    con métricas de regresión y derivar clasificación binaria usando un
-    umbral externo.
+    Calcula el retraso promedio (en minutos) con el que aterrizan los
+    vuelos en cada aeropuerto destino dentro de la ventana temporal
+    futura. ArrDelay es el target natural para una GNN de propagación: el
+    retraso "fluye" por las aristas X→Y como `DepDelay_X` y aterriza como
+    `ArrDelay_Y`. Predecir DepDelay (versión anterior) es en gran medida
+    endógeno al aeropuerto y un modelo denso lo iguala.
 
     Args:
-        window_df: DataFrame de la ventana FUTURA (target).
+        window_df: DataFrame de la ventana FUTURA (target), filtrado por
+            arr_timestamp (vuelos que LLEGAN en la ventana).
         airport_map: Mapeo de código IATA a índice.
 
     Returns:
-        Tensor continuo [num_nodes] con retraso promedio en minutos.
+        Tensor continuo [num_nodes] con retraso medio de llegada (min).
     """
     num_nodes = len(airport_map)
     targets = torch.zeros(num_nodes, dtype=torch.float32)
@@ -179,12 +182,12 @@ def compute_node_targets(
     if window_df.empty:
         return targets
 
-    origin_groups = window_df.groupby("Origin")
-    for airport, group in origin_groups:
+    dest_groups = window_df.groupby("Dest")
+    for airport, group in dest_groups:
         if airport not in airport_map:
             continue
         idx = airport_map[airport]
-        targets[idx] = group["DepDelay"].mean()
+        targets[idx] = group["ArrDelay"].mean()
 
     return torch.nan_to_num(targets, nan=0.0)
 
@@ -216,10 +219,15 @@ def compute_multi_horizon_targets(
     num_horizons = len(horizons)
     targets = torch.zeros(num_nodes, num_horizons, dtype=torch.float32)
 
+    # La columna `arr_timestamp` (creada en `create_temporal_graphs`) es la
+    # clave correcta para la ventana del target: queremos los vuelos que
+    # ATERRIZAN en [h_start, h_end), no los que despegan.
+    arr_col = "arr_timestamp" if "arr_timestamp" in df.columns else "timestamp"
+
     for h_idx, h in enumerate(horizons):
         h_start = current_end + (h - 1) * window_delta
         h_end = current_end + h * window_delta
-        h_mask = (df["timestamp"] >= h_start) & (df["timestamp"] < h_end)
+        h_mask = (df[arr_col] >= h_start) & (df[arr_col] < h_end)
         h_df = df[h_mask]
 
         if len(h_df) < 10:
@@ -277,6 +285,26 @@ def create_temporal_graphs(
         df["Hour"], unit="h"
     )
 
+    # Crear arr_timestamp basado en CRSArrTime (la hora *programada* de
+    # llegada). Es la clave correcta para la ventana del target: queremos
+    # los vuelos que LLEGAN al destino en [h_start, h_end), no los que
+    # despegan. Si CRSArrTime < CRSDepTime suponemos vuelo nocturno y
+    # sumamos un día (los vuelos que cruzan la frontera del día se
+    # detectan correctamente para horarios típicos en EE.UU.).
+    if "CRSArrTime" in df.columns:
+        arr_hour = (df["CRSArrTime"] // 100).clip(0, 23).astype("Int16")
+        crosses_midnight = (df["CRSArrTime"] < df["CRSDepTime"]).fillna(False)
+        df["arr_timestamp"] = (
+            pd.to_datetime(df["FlightDate"])
+            + pd.to_timedelta(arr_hour.astype("Int64"), unit="h")
+            + pd.to_timedelta(crosses_midnight.astype(int), unit="D")
+        )
+    else:
+        # Fallback: si no se cargó CRSArrTime, usar la hora de salida como
+        # proxy. Mantiene retrocompatibilidad con tests/datos antiguos pero
+        # introduce un sesgo (subestima cuántos vuelos llegan en la ventana).
+        df["arr_timestamp"] = df["timestamp"]
+
     # Ordenar por timestamp
     df = df.sort_values("timestamp").reset_index(drop=True)
 
@@ -319,10 +347,12 @@ def create_temporal_graphs(
                 current_time += window_delta
                 continue
         else:
-            # Targets single-horizon: [num_nodes] (retrocompatible)
+            # Targets single-horizon: [num_nodes] (retrocompatible).
+            # Usar arr_timestamp por la misma razón que el caso multi-horizon.
+            arr_col = "arr_timestamp" if "arr_timestamp" in df.columns else "timestamp"
             next_mask = (
-                (df["timestamp"] >= current_end)
-                & (df["timestamp"] < current_end + window_delta)
+                (df[arr_col] >= current_end)
+                & (df[arr_col] < current_end + window_delta)
             )
             next_df = df[next_mask]
 
