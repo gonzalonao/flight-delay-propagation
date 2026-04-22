@@ -339,12 +339,17 @@ def create_temporal_graphs(
         # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
         active_mask = node_features.abs().sum(dim=1) > 0
 
+        # `timestamp` (ISO string) marca el inicio de la ventana de target
+        # — se usa para el split cronológico por fecha en
+        # `split_graphs_temporal`. Como string es compatible con el batching
+        # de PyG (no se concatena, solo se preserva por grafo).
         graph = Data(
             x=node_features,
             edge_index=edge_index,
             edge_attr=edge_weight.unsqueeze(-1),
             y=node_targets,
             active_mask=active_mask,
+            timestamp=current_end.isoformat(),
         )
         graphs.append(graph)
 
@@ -467,29 +472,56 @@ def split_graphs_temporal(
     graphs: list[Data],
     train_ratio: float = 0.7,
     val_ratio: float = 0.15,
+    train_end: str | None = None,
+    val_end: str | None = None,
 ) -> dict[str, list[Data]]:
     """Divide los grafos temporales en train/val/test.
 
-    Los grafos ya están ordenados temporalmente, así que se usa una
-    separación secuencial para evitar fuga de información temporal.
+    Soporta dos modos:
+    - **Por fecha** (preferido): si se pasan ``train_end`` y ``val_end``
+      como strings ISO (e.g. ``"2019-07-01"``), los grafos se agrupan por
+      su atributo ``timestamp``: ``< train_end`` → train; entre
+      ``train_end`` y ``val_end`` → val; ``≥ val_end`` → test. Funciona
+      correctamente con datasets que cubren varios años (cosa que el modo
+      por mes no hacía: jan-2018 y jan-2019 caían en el mismo bucket).
+    - **Por ratio** (fallback / retrocompatibilidad): si las fechas no
+      están dadas, se mantiene el corte secuencial por proporción.
 
     Args:
         graphs: Lista de grafos PyG ordenados temporalmente.
-        train_ratio: Proporción de grafos para entrenamiento.
-        val_ratio: Proporción de grafos para validación.
+        train_ratio: Proporción de grafos para entrenamiento (modo ratio).
+        val_ratio: Proporción de grafos para validación (modo ratio).
+        train_end: Fecha ISO ``YYYY-MM-DD`` que cierra el split de train.
+        val_end: Fecha ISO ``YYYY-MM-DD`` que cierra el split de val.
 
     Returns:
         Diccionario con claves 'train', 'val', 'test'.
     """
-    n = len(graphs)
-    train_end = int(n * train_ratio)
-    val_end = int(n * (train_ratio + val_ratio))
-
-    splits = {
-        "train": graphs[:train_end],
-        "val": graphs[train_end:val_end],
-        "test": graphs[val_end:],
-    }
+    if train_end is not None and val_end is not None:
+        # Modo por fecha. Comparación lexicográfica sobre ISO strings es
+        # correcta porque el formato es ordenable.
+        train_split = [g for g in graphs if g.timestamp < train_end]
+        val_split = [g for g in graphs if train_end <= g.timestamp < val_end]
+        test_split = [g for g in graphs if g.timestamp >= val_end]
+        splits = {"train": train_split, "val": val_split, "test": test_split}
+        logger.info(
+            "Split por fecha: train < %s, val < %s, test ≥ %s",
+            train_end, val_end, val_end,
+        )
+    else:
+        n = len(graphs)
+        cut_train = int(n * train_ratio)
+        cut_val = int(n * (train_ratio + val_ratio))
+        splits = {
+            "train": graphs[:cut_train],
+            "val": graphs[cut_train:cut_val],
+            "test": graphs[cut_val:],
+        }
+        logger.info(
+            "Split por ratio: train=%.0f%%, val=%.0f%%, test=%.0f%%",
+            train_ratio * 100, val_ratio * 100,
+            (1 - train_ratio - val_ratio) * 100,
+        )
 
     for name, split in splits.items():
         logger.info("Graph split %s: %d grafos", name, len(split))
