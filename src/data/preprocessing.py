@@ -54,8 +54,13 @@ def clean_flights(df: pd.DataFrame) -> pd.DataFrame:
 def fill_delay_nulls(df: pd.DataFrame) -> pd.DataFrame:
     """Rellena valores nulos en columnas de retraso con 0.
 
-    Las columnas de tipo de retraso (CarrierDelay, WeatherDelay, etc.)
-    son nulas cuando no hubo retraso de ese tipo. Se rellenan con 0.
+    - DepDelay/ArrDelay: nulos suelen indicar vuelos no operados (cancelados).
+      `clean_flights` ya elimina cancelados, pero rellenamos por seguridad.
+    - Columnas BTS de causa (CarrierDelay, WeatherDelay, NASDelay,
+      SecurityDelay, LateAircraftDelay): el dataset las define como NaN
+      cuando ArrDelay < 15 min, no como "delay desconocido". Rellenar con 0
+      es semánticamente correcto.
+    - DepDel15/ArrDel15: indicadores binarios; nulo ≡ no aplicable ≡ 0.
 
     Args:
         df: DataFrame de vuelos.
@@ -65,6 +70,9 @@ def fill_delay_nulls(df: pd.DataFrame) -> pd.DataFrame:
     """
     delay_columns = [
         "DepDelay", "ArrDelay",
+        "CarrierDelay", "WeatherDelay", "NASDelay",
+        "SecurityDelay", "LateAircraftDelay",
+        "DepDel15", "ArrDel15",
     ]
 
     for col in delay_columns:

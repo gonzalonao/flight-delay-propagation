@@ -18,21 +18,39 @@ data:
   years: [2018]
   sample_frac: 0.3
   random_seed: 42
+  # Ver `configs/default.yaml` para la justificación del agrupamiento
+  # Class A (schedule) vs Class B (actuals) y la nota sobre BTS.
   columns:
     - FlightDate
     - Airline
     - Origin
     - Dest
     - CRSDepTime
-    - DepDelay
-    - ArrDelay
+    - CRSArrTime
+    - CRSElapsedTime
     - Distance
-    - Cancelled
-    - Diverted
-    - AirTime
     - Month
     - DayOfWeek
     - DayofMonth
+    - Cancelled
+    - Diverted
+    - DepTime
+    - ArrTime
+    - DepDelay
+    - ArrDelay
+    - DepDel15
+    - ArrDel15
+    - WheelsOff
+    - WheelsOn
+    - TaxiOut
+    - TaxiIn
+    - AirTime
+    - ActualElapsedTime
+    - CarrierDelay
+    - WeatherDelay
+    - NASDelay
+    - SecurityDelay
+    - LateAircraftDelay
 
 features:
   target: ArrDelay

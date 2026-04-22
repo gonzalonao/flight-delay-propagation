@@ -8,24 +8,47 @@ data:
   years: [2018]                  # Empezar con un año durante desarrollo
   sample_frac: 0.1               # Fracción de datos para desarrollo rápido
   random_seed: 42
-  # Columnas relevantes del dataset de Kaggle
-  # Nota: el Parquet NO contiene CarrierDelay, WeatherDelay, NASDelay,
-  # SecurityDelay ni LateAircraftDelay (solo están en algunos CSVs).
+  # Columnas relevantes del dataset de Kaggle (Combined_Flights, BTS On-Time).
+  # Agrupadas por disponibilidad temporal — ver `src/data/loader.py` y la
+  # invariante de leakage en `src/data/graph_builder.py`.
+  # Nota: algunos Parquets (sobre todo años antiguos) no contienen las
+  # columnas BTS de causa de retraso. `load_parquet` ignora silenciosamente
+  # las columnas ausentes y avisa por log; los modelos deben tolerar
+  # ausencia rellenando con 0 vía `fill_delay_nulls`.
   columns:
+    # Identificadores y schedule (Class A — known a priori)
     - FlightDate
     - Airline
     - Origin
     - Dest
     - CRSDepTime
-    - DepDelay
-    - ArrDelay
+    - CRSArrTime
+    - CRSElapsedTime
     - Distance
-    - Cancelled
-    - Diverted
-    - AirTime
     - Month
     - DayOfWeek
     - DayofMonth
+    - Cancelled
+    - Diverted
+    # Actuales (Class B — solo válidas para ventanas de input históricas)
+    - DepTime
+    - ArrTime
+    - DepDelay
+    - ArrDelay
+    - DepDel15
+    - ArrDel15
+    - WheelsOff
+    - WheelsOn
+    - TaxiOut
+    - TaxiIn
+    - AirTime
+    - ActualElapsedTime
+    # Descomposición BTS de causas (Class B)
+    - CarrierDelay
+    - WeatherDelay
+    - NASDelay
+    - SecurityDelay
+    - LateAircraftDelay
 
 features:
   target: ArrDelay
