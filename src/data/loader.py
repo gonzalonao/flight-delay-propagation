@@ -10,27 +10,53 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Tipos de datos optimizados para reducir uso de memoria al leer CSVs
+# Tipos de datos optimizados para reducir uso de memoria al leer CSVs.
+# Las columnas se agrupan en dos clases por su disponibilidad temporal:
+#   - Class A (schedule-side): conocidas a priori. Seguras para features
+#     históricas Y futuras (ventana objetivo).
+#   - Class B (actual-side): conocidas solo después de que ocurre el vuelo.
+#     Solo usables para features de la ventana de input histórica.
 CSV_DTYPES: dict[str, Any] = {
+    # Identificadores y schedule (Class A — known a priori)
     "FlightDate": str,
     "Airline": "category",
     "Origin": "category",
     "Dest": "category",
     "CRSDepTime": "Int16",
-    "DepDelay": "Float32",
-    "ArrDelay": "Float32",
+    "CRSArrTime": "Int16",
+    "CRSElapsedTime": "Float32",
     "Distance": "Float32",
-    "Cancelled": bool,
-    "Diverted": bool,
-    "AirTime": "Float32",
     "Month": "Int8",
     "DayOfWeek": "Int8",
     "DayofMonth": "Int8",
+    # Estado del vuelo (semánticamente Class A, conocido al cierre de la ventana)
+    "Cancelled": bool,
+    "Diverted": bool,
+    # Actuales (Class B — only safe in historical windows)
+    "DepTime": "Float32",
+    "ArrTime": "Float32",
+    "DepDelay": "Float32",
+    "ArrDelay": "Float32",
+    "DepDel15": "Float32",
+    "ArrDel15": "Float32",
+    "WheelsOff": "Float32",
+    "WheelsOn": "Float32",
+    "TaxiOut": "Float32",
+    "TaxiIn": "Float32",
+    "AirTime": "Float32",
+    "ActualElapsedTime": "Float32",
+    # BTS delay-cause decomposition (Class B — NaN cuando ArrDelay < 15 min)
+    "CarrierDelay": "Float32",
+    "WeatherDelay": "Float32",
+    "NASDelay": "Float32",
+    "SecurityDelay": "Float32",
+    "LateAircraftDelay": "Float32",
 }
 
 
@@ -56,7 +82,24 @@ def load_parquet(
         raise FileNotFoundError(f"Archivo no encontrado: {path}")
 
     logger.info("Cargando Parquet: %s", path.name)
-    df = pd.read_parquet(path, columns=columns, engine="pyarrow")
+
+    # Filtrar columnas a las que existen en el archivo. Algunos parquets
+    # (sobre todo años antiguos) no contienen las columnas BTS de causa de
+    # retraso (CarrierDelay, WeatherDelay, NASDelay, SecurityDelay,
+    # LateAircraftDelay) ni todas las actuales — pedirlas explícitamente
+    # provoca un error duro. Mejor pedir solo lo disponible y avisar.
+    columns_to_read: list[str] | None = columns
+    if columns is not None:
+        available = set(pq.read_schema(path).names)
+        missing = [c for c in columns if c not in available]
+        columns_to_read = [c for c in columns if c in available]
+        if missing:
+            logger.warning(
+                "  Columnas no presentes en %s (se ignoran): %s",
+                path.name, ", ".join(missing),
+            )
+
+    df = pd.read_parquet(path, columns=columns_to_read, engine="pyarrow")
     logger.info("  Filas cargadas: %d, Columnas: %d", len(df), len(df.columns))
 
     if sample_frac is not None and 0 < sample_frac < 1.0:
