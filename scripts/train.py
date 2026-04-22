@@ -336,7 +336,12 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
 
     # Construir grafos temporales
     graphs, airport_map = build_graph_dataset(df, airports, graph_config)
-    graph_splits = split_graphs_temporal(graphs)
+    split_cfg = config.get("split", {})
+    graph_splits = split_graphs_temporal(
+        graphs,
+        train_end=split_cfg.get("train_end"),
+        val_end=split_cfg.get("val_end"),
+    )
 
     train_graphs = graph_splits["train"]
     val_graphs = graph_splits["val"]
@@ -438,7 +443,12 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
 
     # Construir grafos temporales (multi-horizonte)
     graphs, airport_map = build_graph_dataset(df, airports, config)
-    graph_splits = split_graphs_temporal(graphs)
+    split_cfg = config.get("split", {})
+    graph_splits = split_graphs_temporal(
+        graphs,
+        train_end=split_cfg.get("train_end"),
+        val_end=split_cfg.get("val_end"),
+    )
 
     # Crear secuencias por split (evita fuga entre conjuntos)
     input_window = config.get("graph", {}).get("input_window", 6)

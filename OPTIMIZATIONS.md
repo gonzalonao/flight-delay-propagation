@@ -12,7 +12,7 @@
 - [x] Top airports: 30 → 70  // applied in commit B (config-only)
 - [x] min_route_flights: 50 → 30  // applied in commit B (config-only)
 - [x] Years: single year (sampled 10-30%) → 2018 + 2019, full  // applied in commit B (sample_frac=null)
-- [ ] Temporal split: month-based → date-based chronological cutoff
+- [x] Temporal split: month-based → date-based chronological cutoff  // applied in commit C; train < 2019-07-01 < val < 2019-10-01 ≤ test
 - [ ] Snapshot caching to disk under data/processed/snapshots/
 
 ## Node features (historical, from completed flights in input window)
