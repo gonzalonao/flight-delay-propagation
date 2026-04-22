@@ -86,8 +86,15 @@ def create_splits(
 ) -> dict[str, tuple[pd.DataFrame, pd.Series]]:
     """Divide los datos en train/val/test usando separación temporal.
 
-    La separación temporal previene fuga de datos: se entrena con meses
-    anteriores y se evalúa con meses posteriores.
+    Soporta dos modos:
+    - **Por fecha** (preferido cuando hay varios años): claves
+      ``split.train_end`` y ``split.val_end`` como ISO ``YYYY-MM-DD``. El
+      corte se hace sobre ``FlightDate``: ``< train_end`` → train;
+      ``[train_end, val_end)`` → val; ``≥ val_end`` → test.
+    - **Por mes** (legacy): ``split.train_months`` /
+      ``split.val_months`` / ``split.test_months``. Solo válido cuando el
+      dataset cubre un único año — con dos años, jan-2018 y jan-2019 caen
+      en el mismo bucket.
 
     Args:
         df: DataFrame preprocesado con columna FlightDate.
@@ -99,30 +106,61 @@ def create_splits(
         con tupla (features_df, targets_series).
     """
     split_config = config.get("split", {})
-    train_months = split_config.get("train_months", list(range(1, 10)))
-    val_months = split_config.get("val_months", [10, 11])
-    test_months = split_config.get("test_months", [12])
-
-    # Determinar columna de mes para split temporal.
-    # IMPORTANTE: 'month' puede estar normalizada por StandardScaler, así que
-    # priorizar 'Month' (raw del Parquet) o FlightDate (sin escalar).
-    if "Month" in df.columns:
-        month_col = df["Month"]
-    elif "FlightDate" in df.columns:
-        month_col = df["FlightDate"].dt.month
-    elif "month" in df.columns:
-        # Fallback: solo si no está escalada (valores enteros 1-12)
-        month_col = df["month"]
-    else:
-        raise ValueError("No se encontró columna de mes para separación temporal")
+    train_end = split_config.get("train_end")
+    val_end = split_config.get("val_end")
 
     feature_cols = get_feature_columns(df, target_col)
 
+    if train_end is not None and val_end is not None:
+        if "FlightDate" not in df.columns:
+            raise ValueError(
+                "Split por fecha requiere la columna FlightDate sin "
+                "transformar; añádela a `data.columns` del config."
+            )
+        date_col = pd.to_datetime(df["FlightDate"])
+        train_cutoff = pd.Timestamp(train_end)
+        val_cutoff = pd.Timestamp(val_end)
+
+        masks = {
+            "train": date_col < train_cutoff,
+            "val": (date_col >= train_cutoff) & (date_col < val_cutoff),
+            "test": date_col >= val_cutoff,
+        }
+        labels = {
+            "train": f"< {train_end}",
+            "val": f"{train_end} ≤ d < {val_end}",
+            "test": f">= {val_end}",
+        }
+    else:
+        train_months = split_config.get("train_months", list(range(1, 10)))
+        val_months = split_config.get("val_months", [10, 11])
+        test_months = split_config.get("test_months", [12])
+
+        if "Month" in df.columns:
+            month_col = df["Month"]
+        elif "FlightDate" in df.columns:
+            month_col = df["FlightDate"].dt.month
+        elif "month" in df.columns:
+            # Solo válido si no está escalada (valores enteros 1-12)
+            month_col = df["month"]
+        else:
+            raise ValueError("No se encontró columna de mes ni FlightDate")
+
+        masks = {
+            "train": month_col.isin(train_months),
+            "val": month_col.isin(val_months),
+            "test": month_col.isin(test_months),
+        }
+        labels = {
+            "train": f"meses {train_months}",
+            "val": f"meses {val_months}",
+            "test": f"meses {test_months}",
+        }
+
     splits = {}
-    for name, months in [("train", train_months), ("val", val_months), ("test", test_months)]:
-        mask = month_col.isin(months)
+    for name, mask in masks.items():
         subset = df[mask]
         splits[name] = (subset[feature_cols], subset[target_col])
-        logger.info("Split %s: %d muestras (meses %s)", name, len(subset), months)
+        logger.info("Split %s: %d muestras (%s)", name, len(subset), labels[name])
 
     return splits
