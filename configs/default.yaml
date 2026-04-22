@@ -5,8 +5,8 @@
 data:
   raw_dir: data/raw
   processed_dir: data/processed
-  years: [2018]                  # Empezar con un año durante desarrollo
-  sample_frac: 0.1               # Fracción de datos para desarrollo rápido
+  years: [2018, 2019]            # Dos años completos cubren ~14M vuelos
+  sample_frac: null              # Sin muestreo: usa el dataset completo
   random_seed: 42
   # Columnas relevantes del dataset de Kaggle (Combined_Flights, BTS On-Time).
   # Agrupadas por disponibilidad temporal — ver `src/data/loader.py` y la
@@ -72,8 +72,8 @@ split:
   test_months: [12]
 
 graph:
-  top_n_airports: 30             # Filtrar a los N aeropuertos con más tráfico
-  min_route_flights: 50          # Mínimo de vuelos para crear una arista
+  top_n_airports: 70             # ~95% de las salidas de pasajeros en EE.UU.
+  min_route_flights: 30          # Permite rutas menos densas para grafo más rico
   temporal_window_hours: 1       # Resolución temporal de los snapshots
   input_window: 6                # Horas de historia como input
   prediction_horizons: [1, 2, 3, 4, 5]  # Horas futuras a predecir
