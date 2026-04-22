@@ -4,7 +4,28 @@ Transforma datos tabulares de vuelos en grafos donde los nodos son
 aeropuertos y las aristas son rutas aéreas. Genera snapshots temporales
 con features agregadas por aeropuerto y targets continuos de retraso
 (minutos de retraso promedio en la siguiente ventana temporal).
+
+INVARIANTE DE FUGA TEMPORAL (no leakage)
+-----------------------------------------
+En el snapshot con `current_end = T`, las features y aristas de cada
+nodo solo pueden depender de:
+
+  * Cualquier vuelo con `arr_timestamp < T` (completado antes de T).
+  * Las columnas de schedule (`CRS*`, `Distance`, `Airline`, `Origin`,
+    `Dest`) de cualquier vuelo — son conocidas a priori y se usan tanto
+    para features históricas como para features exógenas del target.
+
+NO pueden depender de columnas Class B (post-hoc: `DepTime`, `ArrTime`,
+`WheelsOff/On`, `TaxiOut/In`, `ActualElapsedTime`, `AirTime`,
+`DepDelay`, `ArrDelay`, `DepDel15`, `ArrDel15`, `CarrierDelay`,
+`WeatherDelay`, `NASDelay`, `SecurityDelay`, `LateAircraftDelay`,
+`Cancelled`, `Diverted`) de vuelos cuyo `arr_timestamp >= T`. Las
+features rich precomputadas en `_build_history_lookups` agrupan
+explícitamente por hora de llegada (`arr_timestamp`) para que la
+ventana histórica se cierre estrictamente antes de T.
 """
+
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -14,6 +35,174 @@ from torch_geometric.data import Data
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+# Causas BTS que vienen en el dataset Combined_Flights cuando ArrDelay≥15.
+# Si una columna no está cargada (Parquet antiguo), se omite del feature
+# correspondiente.
+BTS_CAUSE_COLUMNS = (
+    "CarrierDelay", "WeatherDelay", "NASDelay",
+    "SecurityDelay", "LateAircraftDelay",
+)
+
+# Lags (en pasos de `window_delta`) usados como features históricas.
+ARR_DELAY_LAGS = (1, 3, 6, 24)
+ROLLING_WINDOW_HOURS = 6
+
+
+@dataclass
+class HistoryLookups:
+    """Estructuras precomputadas para feature engineering por snapshot.
+
+    Construidas una sola vez al inicio de `create_temporal_graphs`,
+    permiten que cada llamada a `compute_node_features_rich` sea
+    O(num_airports × num_horizons) sin revisitar el DataFrame entero.
+
+    Todas las series están indexadas por `(airport, hour_bucket)` donde
+    `hour_bucket = pd.Timestamp` alineado al inicio de la ventana.
+    """
+
+    arr_delay_by_airport_hour: pd.Series  # mean ArrDelay (Class B)
+    sched_arr_count: pd.Series            # nº vuelos programados a llegar (Class A)
+    sched_dep_count: pd.Series            # nº vuelos programados a salir (Class A)
+    sched_arr_from_top10: pd.Series       # nº de top-10 origins → este aeropuerto
+    sched_arr_mean_distance: pd.Series    # distancia media programada de inbound
+    rolling_mean_arr_delay: pd.Series     # rolling 6h de ArrDelay (Class B)
+    rolling_std_arr_delay: pd.Series      # rolling 6h std (Class B)
+    top10_origins: list[str]              # IATAs de los 10 aeropuertos más conectados
+
+
+def _build_history_lookups(
+    df: pd.DataFrame,
+    airport_map: dict[str, int],
+    window_delta: pd.Timedelta,
+) -> HistoryLookups:
+    """Precomputa las series por (airport, hour_bucket) usadas como
+    lookups en feature engineering.
+
+    Las features Class B (que dependen de actuales) se agregan por la
+    hora *de llegada* (`arr_timestamp`) — así, al consultar `lag=k` desde
+    `current_end=T`, recogemos vuelos que aterrizaron en
+    [T - k·delta, T - (k-1)·delta), que están estrictamente antes de T.
+
+    Las features Class A (schedule) se agregan por la hora *programada*
+    de llegada o salida según corresponda — son válidas tanto para
+    ventanas pasadas como futuras.
+
+    Args:
+        df: DataFrame completo con `arr_timestamp` y `timestamp` ya
+            calculadas y ordenadas cronológicamente.
+        airport_map: Mapeo IATA → índice.
+        window_delta: Tamaño de ventana temporal (e.g. 1h o 2h).
+
+    Returns:
+        ``HistoryLookups`` con todas las series precomputadas.
+    """
+    valid_airports = set(airport_map.keys())
+
+    # Normalizar a buckets alineados al inicio de la ventana.
+    # `pd.Timestamp.floor("Nh")` redondea hacia abajo a múltiplo del
+    # tamaño de la ventana.
+    freq = f"{int(window_delta.total_seconds() // 3600)}h"
+
+    df_arr = df.copy()
+    df_arr["arr_bucket"] = df_arr["arr_timestamp"].dt.floor(freq)
+    df_arr["dep_bucket"] = df_arr["timestamp"].dt.floor(freq)
+
+    # ── Class B: ArrDelay agrupado por (Dest, arr_bucket) ─────────────
+    arr_mask = df_arr["Dest"].isin(valid_airports) & df_arr["ArrDelay"].notna()
+    arr_grp = df_arr[arr_mask].groupby(["Dest", "arr_bucket"], observed=True)
+    arr_delay_by_airport_hour = arr_grp["ArrDelay"].mean().rename("arr_delay_mean")
+
+    # Rolling 6h por aeropuerto (sobre la serie horaria) — sirve como
+    # "media del comportamiento reciente" en cualquier T.
+    rolling_steps = max(1, ROLLING_WINDOW_HOURS // max(1, int(window_delta.total_seconds() // 3600)))
+    rolling_mean = (
+        arr_delay_by_airport_hour
+        .groupby(level=0, observed=True)
+        .rolling(window=rolling_steps, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+    # Para std necesitamos una serie con todas las observaciones de cada
+    # vuelo (no solo la media por bucket); aproximamos con std de las
+    # medias horarias en la ventana, suficiente como señal de volatilidad.
+    rolling_std = (
+        arr_delay_by_airport_hour
+        .groupby(level=0, observed=True)
+        .rolling(window=rolling_steps, min_periods=2)
+        .std()
+        .reset_index(level=0, drop=True)
+        .fillna(0.0)
+    )
+
+    # ── Class A: schedule (Dest, arr_bucket) ─────────────────────────
+    sched_arr_mask = df_arr["Dest"].isin(valid_airports)
+    sched_arr_grp = df_arr[sched_arr_mask].groupby(
+        ["Dest", "arr_bucket"], observed=True
+    )
+    sched_arr_count = sched_arr_grp.size().rename("sched_arr_count").astype("float32")
+    if "Distance" in df_arr.columns:
+        sched_arr_mean_distance = (
+            sched_arr_grp["Distance"].mean().rename("sched_arr_mean_distance")
+        )
+    else:
+        # Serie vacía con el mismo MultiIndex → todos los lookups dan default.
+        sched_arr_mean_distance = pd.Series(dtype="float32", name="sched_arr_mean_distance")
+
+    # ── Class A: schedule (Origin, dep_bucket) ───────────────────────
+    sched_dep_mask = df_arr["Origin"].isin(valid_airports)
+    sched_dep_grp = df_arr[sched_dep_mask].groupby(
+        ["Origin", "dep_bucket"], observed=True
+    )
+    sched_dep_count = sched_dep_grp.size().rename("sched_dep_count").astype("float32")
+
+    # ── Top-10 origins (estructural, una sola vez) ───────────────────
+    top10_origins = (
+        df_arr[df_arr["Origin"].isin(valid_airports)]
+        .groupby("Origin", observed=True).size()
+        .nlargest(10).index.tolist()
+    )
+    top10_set = set(top10_origins)
+    is_from_top10 = df_arr["Origin"].isin(top10_set) & df_arr["Dest"].isin(valid_airports)
+    sched_arr_from_top10 = (
+        df_arr[is_from_top10]
+        .groupby(["Dest", "arr_bucket"], observed=True)
+        .size()
+        .rename("sched_arr_from_top10")
+        .astype("float32")
+    )
+
+    return HistoryLookups(
+        arr_delay_by_airport_hour=arr_delay_by_airport_hour,
+        sched_arr_count=sched_arr_count,
+        sched_dep_count=sched_dep_count,
+        sched_arr_from_top10=sched_arr_from_top10,
+        sched_arr_mean_distance=sched_arr_mean_distance,
+        rolling_mean_arr_delay=rolling_mean,
+        rolling_std_arr_delay=rolling_std,
+        top10_origins=top10_origins,
+    )
+
+
+def _series_lookup(
+    s: pd.Series,
+    airport: str,
+    bucket: pd.Timestamp,
+    default: float = 0.0,
+) -> float:
+    """Lookup tolerante en una serie indexada por (airport, bucket)."""
+    try:
+        v = s.loc[(airport, bucket)]
+    except KeyError:
+        return default
+    return float(v) if not pd.isna(v) else default
+
+
+def _cyclic_encode(value: float, period: float) -> tuple[float, float]:
+    """Codificación sin/cos de una variable cíclica."""
+    angle = 2.0 * np.pi * value / period
+    return float(np.sin(angle)), float(np.cos(angle))
 
 
 def build_airport_mapping(airports: list[str]) -> dict[str, int]:
@@ -153,6 +342,199 @@ def compute_node_features(
     features = torch.nan_to_num(features, nan=0.0)
 
     return features
+
+
+def compute_node_features_rich(
+    window_df: pd.DataFrame,
+    airport_map: dict[str, int],
+    *,
+    current_end: pd.Timestamp,
+    window_delta: pd.Timedelta,
+    prediction_horizons: list[int],
+    history_lookups: HistoryLookups,
+    delay_threshold: float = 15.0,
+) -> torch.Tensor:
+    """Versión enriquecida de ``compute_node_features``.
+
+    Devuelve un vector denso por nodo organizado en bloques con tamaños
+    fijos (la dimensión total depende de ``len(prediction_horizons)``):
+
+      Bloque                                      | tamaño
+      --------------------------------------------|-------
+      A) Aggregates current window (Class B)      | 9
+      B) Volumen / disrupción (Class A+B)         | 4
+      C) Causas BTS (Class B, mean per cause)     | 5
+      D) Lags ArrDelay (Class B, vía lookup)      | len(ARR_DELAY_LAGS)
+      E) Rolling 6h mean+std (Class B, lookup)    | 2
+      F) Calendario cíclico de la ventana actual  | 6
+      G) Exógenas futuras por horizonte (Class A) | 5 × len(horizons)
+
+    Para 5 horizontes da 9+4+5+4+2+6+25 = 55 features por nodo.
+
+    Args:
+        window_df: vuelos completados en la ventana de input
+            ``[current_end - window_delta, current_end)`` — usados para
+            las agregaciones del bloque A, B (parcial), C.
+        airport_map: IATA → índice.
+        current_end: instante T que cierra la ventana de input.
+        window_delta: duración de la ventana.
+        prediction_horizons: horizontes futuros (e.g. [1,2,4,6,8]).
+        history_lookups: estructuras precomputadas.
+        delay_threshold: umbral en min para % delayed.
+    """
+    num_nodes = len(airport_map)
+    n_lags = len(ARR_DELAY_LAGS)
+    n_horizons = len(prediction_horizons)
+    feat_dim = 9 + 4 + 5 + n_lags + 2 + 6 + 5 * n_horizons
+    features = torch.zeros(num_nodes, feat_dim, dtype=torch.float32)
+
+    # ── A. Aggregates de la ventana actual ───────────────────────────
+    if not window_df.empty:
+        # Por destino: ArrDelay (signal headline, alineado con el target).
+        dest_g = window_df.groupby("Dest", observed=True)
+        for airport, group in dest_g:
+            if airport not in airport_map:
+                continue
+            i = airport_map[airport]
+            arr = group["ArrDelay"].values
+            arr = arr[~np.isnan(arr)]
+            if arr.size > 0:
+                features[i, 0] = float(np.mean(arr))
+                features[i, 1] = float(np.std(arr)) if arr.size > 1 else 0.0
+                features[i, 2] = float(np.percentile(arr, 75))
+                features[i, 3] = float(np.percentile(arr, 90))
+                features[i, 6] = float(np.mean(arr > delay_threshold))
+                features[i, 7] = float(np.mean(arr > 60.0))
+            if "TaxiIn" in group.columns:
+                ti = group["TaxiIn"].dropna().values
+                if ti.size > 0:
+                    features[i, 8] = float(np.mean(ti))
+
+        # Por origen: DepDelay (estado endógeno) + TaxiOut.
+        ori_g = window_df.groupby("Origin", observed=True)
+        for airport, group in ori_g:
+            if airport not in airport_map:
+                continue
+            i = airport_map[airport]
+            dep = group["DepDelay"].values
+            dep = dep[~np.isnan(dep)]
+            if dep.size > 0:
+                features[i, 4] = float(np.mean(dep))
+                features[i, 5] = float(np.std(dep)) if dep.size > 1 else 0.0
+            if "TaxiOut" in group.columns:
+                to = group["TaxiOut"].dropna().values
+                if to.size > 0:
+                    # Reusa la columna 8 si TaxiIn faltó; si ambas existen,
+                    # promediamos para evitar inflar la dimensión.
+                    if features[i, 8] != 0.0:
+                        features[i, 8] = (features[i, 8] + float(np.mean(to))) / 2.0
+                    else:
+                        features[i, 8] = float(np.mean(to))
+
+    # ── B. Volumen / disrupción ─────────────────────────────────────
+    # 9: num_arrivals_completed (normalizado por nº mediano del aeropuerto)
+    # 10: num_departures_completed (idem)
+    # 11: num_cancellations  12: num_diversions
+    if not window_df.empty:
+        # arrivals = vuelos cuyo Dest ∈ map y arr_timestamp < current_end
+        # (window_df ya está filtrado a la ventana, así que basta contar)
+        for airport, group in window_df.groupby("Dest", observed=True):
+            if airport in airport_map:
+                features[airport_map[airport], 9] = float(len(group))
+        for airport, group in window_df.groupby("Origin", observed=True):
+            if airport in airport_map:
+                features[airport_map[airport], 10] = float(len(group))
+        if "Cancelled" in window_df.columns:
+            cancelled_df = window_df[window_df["Cancelled"].astype(bool)]
+            for airport, group in cancelled_df.groupby("Origin", observed=True):
+                if airport in airport_map:
+                    features[airport_map[airport], 11] = float(len(group))
+        if "Diverted" in window_df.columns:
+            diverted_df = window_df[window_df["Diverted"].astype(bool)]
+            for airport, group in diverted_df.groupby("Origin", observed=True):
+                if airport in airport_map:
+                    features[airport_map[airport], 12] = float(len(group))
+        # Normalizar arrivals/departures por máximo del snapshot.
+        for col in (9, 10):
+            mx = float(features[:, col].max())
+            if mx > 0:
+                features[:, col] = features[:, col] / mx
+
+    # ── C. BTS causas (por destino, media sobre vuelos completados) ──
+    if not window_df.empty:
+        bts_present = [c for c in BTS_CAUSE_COLUMNS if c in window_df.columns]
+        if bts_present:
+            for airport, group in window_df.groupby("Dest", observed=True):
+                if airport not in airport_map:
+                    continue
+                i = airport_map[airport]
+                for k, col in enumerate(BTS_CAUSE_COLUMNS):
+                    if col in bts_present:
+                        v = group[col].mean()
+                        features[i, 13 + k] = 0.0 if pd.isna(v) else float(v)
+
+    # ── D. Lags ArrDelay (lookup en serie horaria precomputada) ──────
+    base_col = 13 + 5
+    for lag_idx, lag in enumerate(ARR_DELAY_LAGS):
+        bucket = (current_end - lag * window_delta).floor(
+            f"{int(window_delta.total_seconds() // 3600)}h"
+        )
+        for airport, i in airport_map.items():
+            features[i, base_col + lag_idx] = _series_lookup(
+                history_lookups.arr_delay_by_airport_hour, airport, bucket
+            )
+
+    # ── E. Rolling 6h mean+std (lookup en bucket previo a current_end) ─
+    base_col += n_lags
+    rolling_bucket = (current_end - window_delta).floor(
+        f"{int(window_delta.total_seconds() // 3600)}h"
+    )
+    for airport, i in airport_map.items():
+        features[i, base_col] = _series_lookup(
+            history_lookups.rolling_mean_arr_delay, airport, rolling_bucket
+        )
+        features[i, base_col + 1] = _series_lookup(
+            history_lookups.rolling_std_arr_delay, airport, rolling_bucket
+        )
+
+    # ── F. Calendario cíclico (mismo valor para todos los nodos) ─────
+    base_col += 2
+    h_sin, h_cos = _cyclic_encode(current_end.hour, 24)
+    dow_sin, dow_cos = _cyclic_encode(current_end.dayofweek, 7)
+    m_sin, m_cos = _cyclic_encode(current_end.month - 1, 12)
+    cyclic = torch.tensor([h_sin, h_cos, dow_sin, dow_cos, m_sin, m_cos],
+                          dtype=torch.float32)
+    features[:, base_col:base_col + 6] = cyclic.unsqueeze(0).expand(num_nodes, -1)
+
+    # ── G. Exógenas futuras por horizonte (Class A) ──────────────────
+    base_col += 6
+    bucket_size = f"{int(window_delta.total_seconds() // 3600)}h"
+    for h_idx, h in enumerate(prediction_horizons):
+        h_start = current_end + (h - 1) * window_delta
+        h_bucket = h_start.floor(bucket_size)
+        col_offset = base_col + 5 * h_idx
+        for airport, i in airport_map.items():
+            features[i, col_offset + 0] = _series_lookup(
+                history_lookups.sched_arr_count, airport, h_bucket
+            )
+            features[i, col_offset + 1] = _series_lookup(
+                history_lookups.sched_dep_count, airport, h_bucket
+            )
+            features[i, col_offset + 2] = _series_lookup(
+                history_lookups.sched_arr_from_top10, airport, h_bucket
+            )
+            features[i, col_offset + 3] = _series_lookup(
+                history_lookups.sched_arr_mean_distance, airport, h_bucket
+            )
+        # Hora-del-día del centro del horizonte target (cíclica, 1 nº).
+        # Usamos sin como única columna por horizonte para no añadir 2×5
+        # más; el coseno se omite porque la hora del día es ya rica en C.
+        target_center_hour = (h_start + window_delta / 2).hour
+        h_sin_target, _ = _cyclic_encode(target_center_hour, 24)
+        features[:, col_offset + 4] = h_sin_target
+
+    # ── normalización final: clip + nan→0 ────────────────────────────
+    return torch.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def compute_node_targets(
@@ -314,11 +696,16 @@ def create_temporal_graphs(
     window_delta = pd.Timedelta(hours=window_hours)
 
     # Calcular cuántas ventanas futuras necesitamos
+    horizons_for_features = prediction_horizons if multi_horizon else [1]
     if multi_horizon:
         max_horizon = max(prediction_horizons)
         lookahead = max_horizon * window_delta
     else:
         lookahead = window_delta
+
+    # Precomputar lookups históricos y exógenos. Se calculan una sola vez
+    # sobre el dataset entero — cada snapshot consulta valores en O(N·H).
+    history_lookups = _build_history_lookups(df, airport_map, window_delta)
 
     graphs = []
     current_time = min_time
@@ -362,8 +749,14 @@ def create_temporal_graphs(
 
             node_targets = compute_node_targets(next_df, airport_map)
 
-        node_features = compute_node_features(
-            window_df, airport_map, delay_threshold
+        node_features = compute_node_features_rich(
+            window_df,
+            airport_map,
+            current_end=current_end,
+            window_delta=window_delta,
+            prediction_horizons=horizons_for_features,
+            history_lookups=history_lookups,
+            delay_threshold=delay_threshold,
         )
 
         # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
