@@ -16,20 +16,20 @@
 - [ ] Snapshot caching to disk under data/processed/snapshots/
 
 ## Node features (historical, from completed flights in input window)
-- [ ] Replace `avg/std DepDelay outgoing` primacy with `avg/std/p75/p90 ArrDelay incoming` as headline
-- [ ] Add taxi-out / taxi-in averages
-- [ ] Add cancellation & diversion counts
-- [ ] Add 5 BTS delay-cause means (carrier/weather/NAS/security/late_aircraft)
-- [ ] Add lag features: arr_delay at t-1, t-3, t-6, t-24
-- [ ] Add rolling 6h mean & std of arr delay
-- [ ] Add cyclic calendar: hour_sin/cos, dow_sin/cos, month_sin/cos
+- [x] Replace `avg/std DepDelay outgoing` primacy with `avg/std/p75/p90 ArrDelay incoming` as headline  // applied in commit E (compute_node_features_rich, bloque A)
+- [x] Add taxi-out / taxi-in averages  // applied in commit E (col 8, mezcla TaxiOut+TaxiIn cuando ambos existen)
+- [x] Add cancellation & diversion counts  // applied in commit E (cols 11, 12)
+- [x] Add 5 BTS delay-cause means (carrier/weather/NAS/security/late_aircraft)  // applied in commit E (cols 13–17)
+- [x] Add lag features: arr_delay at t-1, t-3, t-6, t-24  // applied in commit E (vía _build_history_lookups + _series_lookup)
+- [x] Add rolling 6h mean & std of arr delay  // applied in commit E (mismo precomputado, sobre la serie horaria)
+- [x] Add cyclic calendar: hour_sin/cos, dow_sin/cos, month_sin/cos  // applied in commit E (broadcast a todos los nodos)
 
 ## Node features (exogenous future, from published schedule for target window)
-- [ ] scheduled_arrivals_count per horizon
-- [ ] scheduled_departures_count per horizon
-- [ ] scheduled_arrivals_from_top10 per horizon (hub concentration)
-- [ ] scheduled_mean_distance_in per horizon
-- [ ] hour-of-day at target window cyclic encoding per horizon
+- [x] scheduled_arrivals_count per horizon  // applied in commit E (bloque G, col_offset+0)
+- [x] scheduled_departures_count per horizon  // applied in commit E (bloque G, col_offset+1)
+- [x] scheduled_arrivals_from_top10 per horizon (hub concentration)  // applied in commit E (bloque G, col_offset+2)
+- [x] scheduled_mean_distance_in per horizon  // applied in commit E (bloque G, col_offset+3)
+- [x] hour-of-day at target window cyclic encoding per horizon  // applied in commit E (col_offset+4, solo sin para no inflar)
 
 ## Edge features (replace single static weight)
 - [ ] flight_count_norm (current weight, retained)
