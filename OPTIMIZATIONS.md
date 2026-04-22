@@ -9,9 +9,9 @@
 ## Data scope
 - [x] Expand loaded columns: schedule-side (CRSArrTime, CRSElapsedTime) + actuals (DepTime, ArrTime, WheelsOff/On, TaxiOut/In, AirTime, ActualElapsedTime, DepDel15, ArrDel15)  // applied in commit A; load_parquet ahora ignora columnas ausentes
 - [x] Add BTS cause columns: CarrierDelay, WeatherDelay, NASDelay, SecurityDelay, LateAircraftDelay  // applied in commit A; fill_delay_nulls rellena NaN→0 (NaN ≡ ArrDelay<15)
-- [ ] Top airports: 30 → 70
-- [ ] min_route_flights: 50 → 30
-- [ ] Years: single year (sampled 10-30%) → 2018 + 2019, full
+- [x] Top airports: 30 → 70  // applied in commit B (config-only)
+- [x] min_route_flights: 50 → 30  // applied in commit B (config-only)
+- [x] Years: single year (sampled 10-30%) → 2018 + 2019, full  // applied in commit B (sample_frac=null)
 - [ ] Temporal split: month-based → date-based chronological cutoff
 - [ ] Snapshot caching to disk under data/processed/snapshots/
 
