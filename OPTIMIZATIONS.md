@@ -13,7 +13,7 @@
 - [x] min_route_flights: 50 → 30  // applied in commit B (config-only)
 - [x] Years: single year (sampled 10-30%) → 2018 + 2019, full  // applied in commit B (sample_frac=null)
 - [x] Temporal split: month-based → date-based chronological cutoff  // applied in commit C; train < 2019-07-01 < val < 2019-10-01 ≤ test
-- [ ] Snapshot caching to disk under data/processed/snapshots/
+- [x] Snapshot caching to disk under data/processed/snapshots/  // applied in commit G; key SHA-256 sobre schema+config+airports+rango temporal del df
 
 ## Node features (historical, from completed flights in input window)
 - [x] Replace `avg/std DepDelay outgoing` primacy with `avg/std/p75/p90 ArrDelay incoming` as headline  // applied in commit E (compute_node_features_rich, bloque A)
@@ -82,7 +82,7 @@
 - [ ] Lightweight per-model dataclass for config validation
 
 ## Verification
-- [ ] Leakage unit test (tests/test_data/test_leakage.py)
+- [x] Leakage unit test (tests/test_data/test_leakage.py)  // applied in commit G; sentinel ArrDelay=999 verifica nodos+edges; reveló que window_df necesitaba filtro arr_timestamp<T
 - [ ] Per-model smoke test on mock data (tests/test_integration.py)
 - [ ] Populated notebooks/03_results.ipynb with comparison table & MAE-vs-horizon plot
 
