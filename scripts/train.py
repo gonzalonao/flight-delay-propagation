@@ -38,7 +38,7 @@ from src.models.multi_horizon_gat import MultiHorizonGAT
 from src.models.seq2seq_gnn import Seq2SeqGNN
 from src.models.spatiotemporal_gnn import SpatioTemporalGNN
 from src.training.graph_trainer import GraphTrainer, SequenceGraphTrainer
-from src.training.losses import WeightedMSELoss
+from src.training.losses import WeightedHuberLoss, WeightedMSELoss
 from src.training.trainer import Trainer
 from src.utils.config import load_config
 from src.utils.io import get_data_dir, get_output_dir
@@ -193,6 +193,61 @@ def _build_optimizer_and_scheduler(
         scheduler = None
 
     return optimizer, scheduler
+
+
+def _build_criterion(config: dict) -> torch.nn.Module:
+    """Construye la función de pérdida según ``training.loss``.
+
+    Soporta:
+
+    - ``"mse"`` (por defecto si no se especifica): ``nn.MSELoss()``.
+    - ``"weighted_mse"``: MSE con ponderación por delay + horizonte.
+    - ``"weighted_huber"``: Huber con ponderación por delay + horizonte,
+      delta configurable vía ``training.huber_delta`` (default 10 min).
+
+    Args:
+        config: Configuración completa.
+
+    Returns:
+        Módulo de pérdida listo para usar en el trainer.
+    """
+    training_config = config["training"]
+    loss_name = training_config.get("loss", "mse")
+
+    if loss_name in ("weighted_mse", "weighted_huber"):
+        delay_threshold = config.get("evaluation", {}).get(
+            "delay_threshold_minutes", 15
+        )
+        delay_weight = training_config.get("delay_weight", 2.0)
+        horizon_weights = training_config.get("horizon_weights")
+        hw_str = f", horizon_weights={horizon_weights}" if horizon_weights else ""
+
+        if loss_name == "weighted_mse":
+            criterion = WeightedMSELoss(
+                high_delay_threshold=delay_threshold,
+                high_delay_weight=delay_weight,
+                horizon_weights=horizon_weights,
+            )
+            logger.info(
+                "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f%s)",
+                delay_threshold, delay_weight, hw_str,
+            )
+        else:  # weighted_huber
+            delta = training_config.get("huber_delta", 10.0)
+            criterion = WeightedHuberLoss(
+                high_delay_threshold=delay_threshold,
+                high_delay_weight=delay_weight,
+                horizon_weights=horizon_weights,
+                delta=delta,
+            )
+            logger.info(
+                "Pérdida: WeightedHuber (delta=%.1f min, umbral=%.0f min, "
+                "peso=%.1f%s)",
+                delta, delay_threshold, delay_weight, hw_str,
+            )
+        return criterion
+
+    return torch.nn.MSELoss()
 
 
 def _log_test_results(metrics: dict[str, float], model_name: str) -> None:
@@ -381,27 +436,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
 
     training_config = config["training"]
     optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
-
-    # Seleccionar función de pérdida
-    loss_config = training_config.get("loss", "mse")
-    if loss_config == "weighted_mse":
-        delay_threshold = config.get("evaluation", {}).get(
-            "delay_threshold_minutes", 15
-        )
-        delay_weight = training_config.get("delay_weight", 2.0)
-        horizon_weights = training_config.get("horizon_weights")
-        criterion = WeightedMSELoss(
-            high_delay_threshold=delay_threshold,
-            high_delay_weight=delay_weight,
-            horizon_weights=horizon_weights,
-        )
-        hw_str = f", horizon_weights={horizon_weights}" if horizon_weights else ""
-        logger.info(
-            "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f%s)",
-            delay_threshold, delay_weight, hw_str,
-        )
-    else:
-        criterion = torch.nn.MSELoss()
+    criterion = _build_criterion(config)
 
     output_dir = get_output_dir()
     checkpoint_path = str(output_dir / f"best_{model_name}.pt")
@@ -509,27 +544,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
 
     training_config = config["training"]
     optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
-
-    # Seleccionar función de pérdida (misma lógica que _train_graph)
-    loss_config = training_config.get("loss", "mse")
-    if loss_config == "weighted_mse":
-        delay_threshold = config.get("evaluation", {}).get(
-            "delay_threshold_minutes", 15
-        )
-        delay_weight = training_config.get("delay_weight", 2.0)
-        horizon_weights = training_config.get("horizon_weights")
-        criterion = WeightedMSELoss(
-            high_delay_threshold=delay_threshold,
-            high_delay_weight=delay_weight,
-            horizon_weights=horizon_weights,
-        )
-        hw_str = f", horizon_weights={horizon_weights}" if horizon_weights else ""
-        logger.info(
-            "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f%s)",
-            delay_threshold, delay_weight, hw_str,
-        )
-    else:
-        criterion = torch.nn.MSELoss()
+    criterion = _build_criterion(config)
 
     output_dir = get_output_dir()
     checkpoint_path = str(output_dir / f"best_{model_name}.pt")
