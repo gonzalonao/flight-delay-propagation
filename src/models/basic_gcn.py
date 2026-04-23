@@ -58,18 +58,25 @@ class BasicGCN(nn.Module):
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
-        edge_weight: torch.Tensor | None = None,
+        edge_attr: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass sobre el grafo.
 
         Args:
             x: Node features [num_nodes, input_dim].
             edge_index: Índices de aristas [2, num_edges].
-            edge_weight: Pesos de aristas [num_edges] (opcional).
+            edge_attr: Tensor de aristas. Puede ser ``[E]`` (peso
+                escalar legado) o ``[E, k]`` (multi-feature). GCNConv
+                solo admite escalar, así que extraemos la primera
+                columna (``flight_count_norm``) cuando es 2D.
 
         Returns:
             Logits por nodo [num_nodes, 1].
         """
+        edge_weight = None
+        if edge_attr is not None:
+            edge_weight = edge_attr[:, 0] if edge_attr.dim() == 2 else edge_attr
+
         for conv, bn in zip(self.convs, self.bns):
             x = conv(x, edge_index, edge_weight=edge_weight)
             x = bn(x)

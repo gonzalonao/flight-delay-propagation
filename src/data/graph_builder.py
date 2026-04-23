@@ -55,11 +55,14 @@ class HistoryLookups:
     """Estructuras precomputadas para feature engineering por snapshot.
 
     Construidas una sola vez al inicio de `create_temporal_graphs`,
-    permiten que cada llamada a `compute_node_features_rich` sea
-    O(num_airports × num_horizons) sin revisitar el DataFrame entero.
+    permiten que cada llamada a `compute_node_features_rich` y
+    `compute_dynamic_edge_attr` sea O(num_airports × num_horizons) o
+    O(num_edges) sin revisitar el DataFrame entero.
 
-    Todas las series están indexadas por `(airport, hour_bucket)` donde
-    `hour_bucket = pd.Timestamp` alineado al inicio de la ventana.
+    Las series indexadas por nodo usan `(airport, hour_bucket)`; las
+    indexadas por arista usan `(origin, dest, hour_bucket)`. En todos
+    los casos `hour_bucket = pd.Timestamp` alineado al inicio de la
+    ventana.
     """
 
     arr_delay_by_airport_hour: pd.Series  # mean ArrDelay (Class B)
@@ -70,6 +73,9 @@ class HistoryLookups:
     rolling_mean_arr_delay: pd.Series     # rolling 6h de ArrDelay (Class B)
     rolling_std_arr_delay: pd.Series      # rolling 6h std (Class B)
     top10_origins: list[str]              # IATAs de los 10 aeropuertos más conectados
+    # Por arista (Origin, Dest, bucket):
+    route_recent_arr_delay: pd.Series     # rolling 6h de ArrDelay por ruta (Class B)
+    route_sched_count: pd.Series          # nº vuelos programados por ruta y dep_bucket (Class A)
 
 
 def _build_history_lookups(
@@ -173,6 +179,39 @@ def _build_history_lookups(
         .astype("float32")
     )
 
+    # ── Por ruta: ArrDelay reciente (rolling 6h) ─────────────────────
+    # Class B: agrupado por (Origin, Dest, arr_bucket) → mean ArrDelay,
+    # luego rolling sobre la dimensión temporal de cada ruta.
+    route_arr_mask = (
+        df_arr["Origin"].isin(valid_airports)
+        & df_arr["Dest"].isin(valid_airports)
+        & df_arr["ArrDelay"].notna()
+    )
+    route_arr_grp = df_arr[route_arr_mask].groupby(
+        ["Origin", "Dest", "arr_bucket"], observed=True
+    )
+    route_arr_delay_hourly = route_arr_grp["ArrDelay"].mean().rename("route_arr_delay")
+    route_recent_arr_delay = (
+        route_arr_delay_hourly
+        .groupby(level=[0, 1], observed=True)
+        .rolling(window=rolling_steps, min_periods=1)
+        .mean()
+        .reset_index(level=[0, 1], drop=True)
+    )
+
+    # ── Por ruta: programación (Class A, dep_bucket) ─────────────────
+    route_sched_mask = (
+        df_arr["Origin"].isin(valid_airports)
+        & df_arr["Dest"].isin(valid_airports)
+    )
+    route_sched_count = (
+        df_arr[route_sched_mask]
+        .groupby(["Origin", "Dest", "dep_bucket"], observed=True)
+        .size()
+        .rename("route_sched_count")
+        .astype("float32")
+    )
+
     return HistoryLookups(
         arr_delay_by_airport_hour=arr_delay_by_airport_hour,
         sched_arr_count=sched_arr_count,
@@ -182,6 +221,8 @@ def _build_history_lookups(
         rolling_mean_arr_delay=rolling_mean,
         rolling_std_arr_delay=rolling_std,
         top10_origins=top10_origins,
+        route_recent_arr_delay=route_recent_arr_delay,
+        route_sched_count=route_sched_count,
     )
 
 
@@ -221,64 +262,163 @@ def build_edge_index(
     df: pd.DataFrame,
     airport_map: dict[str, int],
     min_flights: int = 50,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Construye la matriz de adyacencia (edge_index) desde las rutas.
+) -> tuple[torch.Tensor, torch.Tensor, list[tuple[str, str]]]:
+    """Construye la matriz de adyacencia y las features estáticas de arista.
 
     Crea aristas bidireccionales entre aeropuertos que tienen al menos
-    `min_flights` vuelos en el dataset. Los pesos de las aristas son
-    el número normalizado de vuelos en la ruta.
+    `min_flights` vuelos en el dataset y devuelve un tensor con 3
+    features estáticas por arista (Class A: derivables del schedule):
+
+      Col 0  flight_count_norm        — recuento histórico normalizado
+      Col 1  mean_air_time_norm       — AirTime medio histórico
+      Col 2  mean_scheduled_distance  — Distance media (Class A)
+
+    Estas tres features no cambian entre snapshots; las dos restantes
+    (recent_route_delay, scheduled_flights_next_h_norm) se concatenan
+    por snapshot en `compute_dynamic_edge_attr` para llegar a un
+    `edge_attr` final de shape ``[num_edges, 5]``.
 
     Args:
-        df: DataFrame con columnas Origin y Dest.
+        df: DataFrame con columnas Origin, Dest y opcionalmente
+            AirTime / Distance.
         airport_map: Mapeo de código IATA a índice.
         min_flights: Mínimo de vuelos para crear una arista.
 
     Returns:
-        Tupla de (edge_index [2, num_edges], edge_weight [num_edges]).
+        Tupla de:
+          * ``edge_index`` ``[2, num_edges]``
+          * ``static_edge_attr`` ``[num_edges, 3]``
+          * ``edge_pairs`` lista de ``(origin_iata, dest_iata)`` por
+            cada arista en orden — usada para construir features
+            dinámicas vía lookup en ``HistoryLookups``.
     """
-    # Contar vuelos por ruta
-    route_counts = (
-        df.groupby(["Origin", "Dest"])
-        .size()
-        .reset_index(name="count")
+    # Agregaciones por ruta direccional.
+    agg_dict: dict = {"count": ("Origin", "size")}
+    if "AirTime" in df.columns:
+        agg_dict["mean_air_time"] = ("AirTime", "mean")
+    if "Distance" in df.columns:
+        agg_dict["mean_distance"] = ("Distance", "mean")
+
+    route_stats = (
+        df.groupby(["Origin", "Dest"], observed=True)
+        .agg(**agg_dict)
+        .reset_index()
     )
 
-    # Filtrar rutas con pocos vuelos
-    route_counts = route_counts[route_counts["count"] >= min_flights]
-
-    # Filtrar rutas cuyos aeropuertos están en el mapeo
+    # Filtrar rutas con pocos vuelos y aeropuertos no mapeados.
+    route_stats = route_stats[route_stats["count"] >= min_flights]
     valid = set(airport_map.keys())
-    route_counts = route_counts[
-        route_counts["Origin"].isin(valid) & route_counts["Dest"].isin(valid)
+    route_stats = route_stats[
+        route_stats["Origin"].isin(valid) & route_stats["Dest"].isin(valid)
     ]
 
-    # Construir edge_index (bidireccional)
-    sources = []
-    targets = []
-    weights = []
+    sources: list[int] = []
+    targets: list[int] = []
+    counts: list[float] = []
+    air_times: list[float] = []
+    distances: list[float] = []
+    edge_pairs: list[tuple[str, str]] = []
 
-    for _, row in route_counts.iterrows():
-        src = airport_map[row["Origin"]]
-        dst = airport_map[row["Dest"]]
-        w = row["count"]
-        # Arista en ambas direcciones
+    has_air_time = "mean_air_time" in route_stats.columns
+    has_distance = "mean_distance" in route_stats.columns
+
+    for _, row in route_stats.iterrows():
+        origin, dest = row["Origin"], row["Dest"]
+        src, dst = airport_map[origin], airport_map[dest]
+        c = float(row["count"])
+        at = float(row["mean_air_time"]) if has_air_time and not pd.isna(row["mean_air_time"]) else 0.0
+        di = float(row["mean_distance"]) if has_distance and not pd.isna(row["mean_distance"]) else 0.0
+        # Arista bidireccional con las mismas estadísticas (la ruta
+        # X→Y y Y→X comparten distancia y tiempo medio aéreo; los
+        # delays direccionales viven en `route_recent_arr_delay`).
         sources.extend([src, dst])
         targets.extend([dst, src])
-        weights.extend([w, w])
+        counts.extend([c, c])
+        air_times.extend([at, at])
+        distances.extend([di, di])
+        edge_pairs.extend([(origin, dest), (dest, origin)])
 
     edge_index = torch.tensor([sources, targets], dtype=torch.long)
 
-    # Normalizar pesos al rango [0, 1]
-    weights_tensor = torch.tensor(weights, dtype=torch.float32)
-    if weights_tensor.numel() > 0 and weights_tensor.max() > 0:
-        weights_tensor = weights_tensor / weights_tensor.max()
+    counts_t = torch.tensor(counts, dtype=torch.float32)
+    air_times_t = torch.tensor(air_times, dtype=torch.float32)
+    distances_t = torch.tensor(distances, dtype=torch.float32)
+
+    if counts_t.numel() > 0:
+        if counts_t.max() > 0:
+            counts_t = counts_t / counts_t.max()
+        if air_times_t.max() > 0:
+            air_times_t = air_times_t / air_times_t.max()
+        if distances_t.max() > 0:
+            distances_t = distances_t / distances_t.max()
+
+    static_edge_attr = torch.stack([counts_t, air_times_t, distances_t], dim=1)
 
     logger.info(
-        "Grafo construido: %d nodos, %d aristas (min_flights=%d)",
+        "Grafo construido: %d nodos, %d aristas (min_flights=%d), "
+        "edge_attr estático shape=%s",
         len(airport_map), edge_index.shape[1], min_flights,
+        tuple(static_edge_attr.shape),
     )
 
-    return edge_index, weights_tensor
+    return edge_index, static_edge_attr, edge_pairs
+
+
+def compute_dynamic_edge_attr(
+    edge_pairs: list[tuple[str, str]],
+    history_lookups: HistoryLookups,
+    current_end: pd.Timestamp,
+    window_delta: pd.Timedelta,
+    arr_delay_norm: float = 60.0,
+    sched_count_norm: float = 50.0,
+) -> torch.Tensor:
+    """Calcula las 2 features de arista dinámicas para un snapshot.
+
+    Devuelve ``[num_edges, 2]`` con:
+
+      Col 0  recent_route_delay_norm        — rolling 6h ArrDelay por
+              ruta normalizado (clip ±1) — bucket inmediatamente
+              anterior a ``current_end`` (Class B).
+      Col 1  scheduled_flights_next_h_norm  — recuento de vuelos
+              programados en la ruta para la primera ventana del target
+              normalizado (Class A).
+
+    Los normalizadores son constantes para mantener la escala estable
+    entre snapshots; el ``normalize_features=true`` posterior ajusta el
+    rango final.
+    """
+    bucket_size = f"{int(window_delta.total_seconds() // 3600)}h"
+    history_bucket = (current_end - window_delta).floor(bucket_size)
+    target_bucket = current_end.floor(bucket_size)
+
+    n_edges = len(edge_pairs)
+    out = torch.zeros(n_edges, 2, dtype=torch.float32)
+
+    recent = history_lookups.route_recent_arr_delay
+    sched = history_lookups.route_sched_count
+
+    for i, (origin, dest) in enumerate(edge_pairs):
+        # Recent route delay: lookup (origin, dest, history_bucket) en
+        # la serie pre-rolling. Default 0 si la ruta no tuvo vuelos.
+        try:
+            v = recent.loc[(origin, dest, history_bucket)]
+            if not pd.isna(v):
+                out[i, 0] = float(v) / arr_delay_norm
+        except KeyError:
+            pass
+
+        # Scheduled flights en la siguiente ventana del target.
+        try:
+            c = sched.loc[(origin, dest, target_bucket)]
+            if not pd.isna(c):
+                out[i, 1] = float(c) / sched_count_norm
+        except KeyError:
+            pass
+
+    # Clip a un rango estable para que el outlier no domine.
+    out[:, 0].clamp_(-1.0, 1.0)
+    out[:, 1].clamp_(0.0, 1.0)
+    return out
 
 
 def compute_node_features(
@@ -625,7 +765,8 @@ def create_temporal_graphs(
     df: pd.DataFrame,
     airport_map: dict[str, int],
     edge_index: torch.Tensor,
-    edge_weight: torch.Tensor,
+    edge_attr_static: torch.Tensor,
+    edge_pairs: list[tuple[str, str]],
     window_hours: int = 1,
     delay_threshold: float = 15.0,
     prediction_horizons: list[int] | None = None,
@@ -645,7 +786,8 @@ def create_temporal_graphs(
         df: DataFrame preprocesado con FlightDate y Hour.
         airport_map: Mapeo de código IATA a índice.
         edge_index: Matriz de adyacencia [2, num_edges].
-        edge_weight: Pesos de aristas [num_edges].
+        edge_attr_static: Features estáticas de arista [num_edges, 3].
+        edge_pairs: Lista de ``(origin_iata, dest_iata)`` por arista.
         window_hours: Horas por ventana temporal.
         delay_threshold: Umbral de retraso en minutos.
         prediction_horizons: Lista de horizontes futuros (e.g., [1,2,3,4,5]).
@@ -762,6 +904,12 @@ def create_temporal_graphs(
         # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
         active_mask = node_features.abs().sum(dim=1) > 0
 
+        # Concatenar features estáticas (3) + dinámicas (2) → [E, 5].
+        edge_attr_dynamic = compute_dynamic_edge_attr(
+            edge_pairs, history_lookups, current_end, window_delta,
+        )
+        edge_attr = torch.cat([edge_attr_static, edge_attr_dynamic], dim=1)
+
         # `timestamp` (ISO string) marca el inicio de la ventana de target
         # — se usa para el split cronológico por fecha en
         # `split_graphs_temporal`. Como string es compatible con el batching
@@ -769,7 +917,7 @@ def create_temporal_graphs(
         graph = Data(
             x=node_features,
             edge_index=edge_index,
-            edge_attr=edge_weight.unsqueeze(-1),
+            edge_attr=edge_attr,
             y=node_targets,
             active_mask=active_mask,
             timestamp=current_end.isoformat(),
@@ -863,7 +1011,9 @@ def build_graph_dataset(
     airport_map = build_airport_mapping(airports)
 
     min_flights = graph_config.get("min_route_flights", 50)
-    edge_index, edge_weight = build_edge_index(df, airport_map, min_flights)
+    edge_index, edge_attr_static, edge_pairs = build_edge_index(
+        df, airport_map, min_flights,
+    )
 
     window_hours = graph_config.get("temporal_window_hours", 1)
     delay_threshold = eval_config.get("delay_threshold_minutes", 15)
@@ -874,7 +1024,8 @@ def build_graph_dataset(
         df=df,
         airport_map=airport_map,
         edge_index=edge_index,
-        edge_weight=edge_weight,
+        edge_attr_static=edge_attr_static,
+        edge_pairs=edge_pairs,
         window_hours=window_hours,
         delay_threshold=delay_threshold,
         prediction_horizons=prediction_horizons,

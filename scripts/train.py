@@ -84,12 +84,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_model(config: dict, input_dim: int) -> torch.nn.Module:
+def build_model(
+    config: dict, input_dim: int, edge_dim: int | None = None,
+) -> torch.nn.Module:
     """Instancia el modelo según la configuración.
 
     Args:
         config: Configuración completa.
         input_dim: Número de features de entrada.
+        edge_dim: Dimensión del tensor edge_attr para GATv2Conv. Si
+            ``None`` (modelos tabulares o BasicGCN) se ignora.
 
     Returns:
         Modelo de PyTorch.
@@ -123,6 +127,7 @@ def build_model(config: dict, input_dim: int) -> torch.nn.Module:
             num_layers=model_config.get("num_layers", 3),
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
+            edge_dim=edge_dim,
         )
 
     if model_name == "spatiotemporal_gnn":
@@ -136,6 +141,7 @@ def build_model(config: dict, input_dim: int) -> torch.nn.Module:
             num_gnn_layers=model_config.get("num_gnn_layers", 2),
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
+            edge_dim=edge_dim,
         )
 
     if model_name == "seq2seq_gnn":
@@ -149,6 +155,7 @@ def build_model(config: dict, input_dim: int) -> torch.nn.Module:
             num_gnn_layers=model_config.get("num_gnn_layers", 2),
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
+            edge_dim=edge_dim,
         )
 
     raise ValueError(f"Modelo no reconocido: {model_name}")
@@ -352,14 +359,21 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
         )
         return
 
-    # El input_dim viene de las node features del primer grafo
+    # El input_dim viene de las node features del primer grafo;
+    # edge_dim de las edge_attr (None si no hay).
     input_dim = train_graphs[0].x.shape[1]
-    model = build_model(config, input_dim)
+    sample_ea = train_graphs[0].edge_attr
+    edge_dim = (
+        sample_ea.shape[1]
+        if sample_ea is not None and sample_ea.dim() == 2 else None
+    )
+    model = build_model(config, input_dim, edge_dim=edge_dim)
     logger.info(
-        "Modelo: %s | Parámetros: %d | Nodos: %d",
+        "Modelo: %s | Parámetros: %d | Nodos: %d | edge_dim: %s",
         model_name,
         sum(p.numel() for p in model.parameters()),
         len(airport_map),
+        edge_dim,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -472,15 +486,22 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         len(train_sequences), len(val_sequences), input_window,
     )
 
-    # El input_dim viene de las node features del primer grafo
+    # El input_dim viene de las node features del primer grafo;
+    # edge_dim de las edge_attr (None si no hay).
     input_dim = train_sequences[0][0].x.shape[1]
-    model = build_model(config, input_dim)
+    sample_ea = train_sequences[0][0].edge_attr
+    edge_dim = (
+        sample_ea.shape[1]
+        if sample_ea is not None and sample_ea.dim() == 2 else None
+    )
+    model = build_model(config, input_dim, edge_dim=edge_dim)
     logger.info(
-        "Modelo: %s | Parámetros: %d | Nodos: %d | Secuencia: %d grafos",
+        "Modelo: %s | Parámetros: %d | Nodos: %d | Secuencia: %d grafos | edge_dim: %s",
         model_name,
         sum(p.numel() for p in model.parameters()),
         len(airport_map),
         input_window,
+        edge_dim,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

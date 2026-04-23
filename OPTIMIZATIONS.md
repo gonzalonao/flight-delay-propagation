@@ -32,11 +32,11 @@
 - [x] hour-of-day at target window cyclic encoding per horizon  // applied in commit E (col_offset+4, solo sin para no inflar)
 
 ## Edge features (replace single static weight)
-- [ ] flight_count_norm (current weight, retained)
-- [ ] mean_air_time_norm
-- [ ] recent_route_delay (rolling 6h on this OD pair)
-- [ ] scheduled_flights_next_h_norm (per-snapshot)
-- [ ] mean_scheduled_distance_norm
+- [x] flight_count_norm (current weight, retained)  // applied in commit F (col 0 estática)
+- [x] mean_air_time_norm  // applied in commit F (col 1 estática)
+- [x] recent_route_delay (rolling 6h on this OD pair)  // applied in commit F (col 3 dinámica vía route_recent_arr_delay)
+- [x] scheduled_flights_next_h_norm (per-snapshot)  // applied in commit F (col 4 dinámica vía route_sched_count)
+- [x] mean_scheduled_distance_norm  // applied in commit F (col 2 estática)
 
 ## Targets
 - [x] Primary target: DepDelay → ArrDelay  // applied in commit D; agrupado por Dest, ventana del target keada por arr_timestamp (CRSArrTime)
@@ -50,7 +50,7 @@
 - [ ] WeightedMSE → multi-task Huber + 0.3·Huber_aux + 0.5·BCE
 
 ## Architecture — applies per-model (toggle independently)
-- [ ] GATConv → GATv2Conv with edge_dim=5
+- [x] GATConv → GATv2Conv with edge_dim=5  // applied in commit F (multi_horizon_gat + spatiotemporal/seq2seq vía GATEncoder)
 - [ ] BatchNorm → LayerNorm
 - [ ] Residual connections in GAT encoder (`x = x + gat(x)`)
 - [ ] Activation ELU → GELU
