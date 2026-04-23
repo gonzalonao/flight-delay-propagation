@@ -75,7 +75,7 @@ graph:
   min_route_flights: 30
   temporal_window_hours: 2
   input_window: 6
-  prediction_horizons: [1, 2, 3, 4, 5]
+  prediction_horizons: [1, 2, 4, 6, 8]
   normalize_features: true
 
 model:
