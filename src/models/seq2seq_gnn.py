@@ -39,6 +39,7 @@ class Seq2SeqGNN(nn.Module):
         num_gnn_layers: Number of GATConv layers in the encoder.
         num_horizons: Number of decoding steps (future horizons).
         dropout: Dropout probability.
+        edge_dim: Edge attribute dimension forwarded to ``GATEncoder``.
     """
 
     def __init__(
@@ -50,6 +51,7 @@ class Seq2SeqGNN(nn.Module):
         num_gnn_layers: int = 2,
         num_horizons: int = 5,
         dropout: float = 0.3,
+        edge_dim: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -64,6 +66,7 @@ class Seq2SeqGNN(nn.Module):
             num_heads=num_heads,
             num_layers=num_gnn_layers,
             dropout=dropout,
+            edge_dim=edge_dim,
         )
 
         # Temporal encoder: reads sequence of spatial embeddings
@@ -106,10 +109,7 @@ class Seq2SeqGNN(nn.Module):
         """
         embeddings = []
         for graph in sequence:
-            edge_weight = None
-            if graph.edge_attr is not None:
-                edge_weight = graph.edge_attr.squeeze(-1)
-            emb = self.encoder(graph.x, graph.edge_index, edge_weight)
+            emb = self.encoder(graph.x, graph.edge_index, graph.edge_attr)
             embeddings.append(emb)
 
         # Stack spatial embeddings into a temporal sequence

@@ -147,12 +147,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_model(config: dict, input_dim: int) -> torch.nn.Module:
+def _build_model(
+    config: dict, input_dim: int, edge_dim: int | None = None,
+) -> torch.nn.Module:
     """Instancia el modelo según la configuración completa.
 
     Args:
         config: Configuración completa del proyecto.
         input_dim: Dimensión de entrada.
+        edge_dim: Dimensión del tensor edge_attr (5 con la pipeline
+            actual; None para tabulares o si edge_attr es escalar).
 
     Returns:
         Modelo de PyTorch.
@@ -186,6 +190,7 @@ def _build_model(config: dict, input_dim: int) -> torch.nn.Module:
             num_layers=model_config.get("num_layers", 3),
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
+            edge_dim=edge_dim,
         )
 
     if model_name == "spatiotemporal_gnn":
@@ -200,6 +205,7 @@ def _build_model(config: dict, input_dim: int) -> torch.nn.Module:
             num_gnn_layers=model_config.get("num_gnn_layers", 2),
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
+            edge_dim=edge_dim,
         )
 
     if model_name == "seq2seq_gnn":
@@ -214,6 +220,7 @@ def _build_model(config: dict, input_dim: int) -> torch.nn.Module:
             num_gnn_layers=model_config.get("num_gnn_layers", 2),
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
+            edge_dim=edge_dim,
         )
 
     raise ValueError(f"Modelo no reconocido: {model_name}")
@@ -273,7 +280,12 @@ def main() -> None:
             return
 
         input_dim = test_graphs[0].x.shape[1]
-        model = _build_model(config, input_dim)
+        sample_ea = test_graphs[0].edge_attr
+        edge_dim = (
+            sample_ea.shape[1]
+            if sample_ea is not None and sample_ea.dim() == 2 else None
+        )
+        model = _build_model(config, input_dim, edge_dim=edge_dim)
 
         checkpoint_info = load_checkpoint(args.checkpoint, model)
         logger.info(
