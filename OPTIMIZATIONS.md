@@ -45,8 +45,8 @@
 
 ## Horizons & loss
 - [x] Horizons: [1,2,3,4,5] → [1,2,4,6,8]  // applied in commit H; cambio en 5 configs (default + 4 per-model)
-- [ ] Horizon weights: [5,4,3,2,1] → [3,3,4,5,5] (favor business horizons)
-- [ ] Regression loss: MSE → Huber (δ=10)
+- [x] Horizon weights: [5,4,3,2,1] → [3,3,4,5,5] (favor business horizons)  // applied in commit I; 3 configs multi-horizonte (gat, spatiotemporal, seq2seq)
+- [x] Regression loss: MSE → Huber (δ=10)  // applied in commit I; WeightedHuberLoss via base compartida _WeightedRegressionLossBase; WeightedMSELoss mantenido para ablación
 - [ ] WeightedMSE → multi-task Huber + 0.3·Huber_aux + 0.5·BCE
 
 ## Architecture — applies per-model (toggle independently)
