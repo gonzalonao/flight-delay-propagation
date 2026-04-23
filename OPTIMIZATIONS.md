@@ -44,7 +44,7 @@
 - [ ] Add auxiliary regression head: DepDelay (multi-task, λ=0.3)
 
 ## Horizons & loss
-- [ ] Horizons: [1,2,3,4,5] → [1,2,4,6,8]
+- [x] Horizons: [1,2,3,4,5] → [1,2,4,6,8]  // applied in commit H; cambio en 5 configs (default + 4 per-model)
 - [ ] Horizon weights: [5,4,3,2,1] → [3,3,4,5,5] (favor business horizons)
 - [ ] Regression loss: MSE → Huber (δ=10)
 - [ ] WeightedMSE → multi-task Huber + 0.3·Huber_aux + 0.5·BCE

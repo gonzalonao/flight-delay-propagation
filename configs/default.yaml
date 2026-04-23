@@ -77,7 +77,7 @@ graph:
   min_route_flights: 30          # Permite rutas menos densas para grafo más rico
   temporal_window_hours: 1       # Resolución temporal de los snapshots
   input_window: 6                # Horas de historia como input
-  prediction_horizons: [1, 2, 3, 4, 5]  # Horas futuras a predecir
+  prediction_horizons: [1, 2, 4, 6, 8]  # Horas futuras (h=4/6/8 son los objetivos de negocio)
   cache_dir: data/processed/snapshots   # Caché de snapshots; null para desactivar
 
 model:
