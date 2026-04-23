@@ -25,7 +25,10 @@ explícitamente por hora de llegada (`arr_timestamp`) para que la
 ventana histórica se cierre estrictamente antes de T.
 """
 
+import hashlib
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -528,10 +531,18 @@ def compute_node_features_rich(
     feat_dim = 9 + 4 + 5 + n_lags + 2 + 6 + 5 * n_horizons
     features = torch.zeros(num_nodes, feat_dim, dtype=torch.float32)
 
-    # ── A. Aggregates de la ventana actual ───────────────────────────
-    if not window_df.empty:
+    # Class B (post-hoc) features solo pueden derivarse de vuelos cuyo
+    # arr_timestamp < current_end (i.e., el vuelo ha aterrizado antes de T).
+    # Ver INVARIANTE DE FUGA en el module docstring.
+    if "arr_timestamp" in window_df.columns and not window_df.empty:
+        completed_df = window_df[window_df["arr_timestamp"] < current_end]
+    else:
+        completed_df = window_df
+
+    # ── A. Aggregates de la ventana actual (Class B → completed_df) ──
+    if not completed_df.empty:
         # Por destino: ArrDelay (signal headline, alineado con el target).
-        dest_g = window_df.groupby("Dest", observed=True)
+        dest_g = completed_df.groupby("Dest", observed=True)
         for airport, group in dest_g:
             if airport not in airport_map:
                 continue
@@ -551,7 +562,7 @@ def compute_node_features_rich(
                     features[i, 8] = float(np.mean(ti))
 
         # Por origen: DepDelay (estado endógeno) + TaxiOut.
-        ori_g = window_df.groupby("Origin", observed=True)
+        ori_g = completed_df.groupby("Origin", observed=True)
         for airport, group in ori_g:
             if airport not in airport_map:
                 continue
@@ -572,15 +583,14 @@ def compute_node_features_rich(
                         features[i, 8] = float(np.mean(to))
 
     # ── B. Volumen / disrupción ─────────────────────────────────────
-    # 9: num_arrivals_completed (normalizado por nº mediano del aeropuerto)
-    # 10: num_departures_completed (idem)
-    # 11: num_cancellations  12: num_diversions
-    if not window_df.empty:
-        # arrivals = vuelos cuyo Dest ∈ map y arr_timestamp < current_end
-        # (window_df ya está filtrado a la ventana, así que basta contar)
-        for airport, group in window_df.groupby("Dest", observed=True):
+    # 9: num_arrivals_completed (Class B: solo vuelos ya aterrizados)
+    # 10: num_departures_completed (Class A-ish: schedule del input window)
+    # 11: num_cancellations  12: num_diversions  (Class A: conocidas a priori)
+    if not completed_df.empty:
+        for airport, group in completed_df.groupby("Dest", observed=True):
             if airport in airport_map:
                 features[airport_map[airport], 9] = float(len(group))
+    if not window_df.empty:
         for airport, group in window_df.groupby("Origin", observed=True):
             if airport in airport_map:
                 features[airport_map[airport], 10] = float(len(group))
@@ -600,11 +610,11 @@ def compute_node_features_rich(
             if mx > 0:
                 features[:, col] = features[:, col] / mx
 
-    # ── C. BTS causas (por destino, media sobre vuelos completados) ──
-    if not window_df.empty:
-        bts_present = [c for c in BTS_CAUSE_COLUMNS if c in window_df.columns]
+    # ── C. BTS causas (Class B → completed_df, por destino) ──────────
+    if not completed_df.empty:
+        bts_present = [c for c in BTS_CAUSE_COLUMNS if c in completed_df.columns]
         if bts_present:
-            for airport, group in window_df.groupby("Dest", observed=True):
+            for airport, group in completed_df.groupby("Dest", observed=True):
                 if airport not in airport_map:
                     continue
                 i = airport_map[airport]
@@ -990,12 +1000,68 @@ def normalize_graph_features(
     return normalized, {"mean": mean, "std": std}
 
 
+# Versión del esquema de features de grafo. Cualquier cambio en el contrato
+# de columnas de x/edge_attr/y debe incrementar este valor para invalidar
+# cachés en disco que asuman el esquema anterior.
+GRAPH_SCHEMA_VERSION = 2
+
+
+def _snapshot_cache_key(
+    df: pd.DataFrame,
+    airports: list[str],
+    config: dict,
+) -> str:
+    """Hash estable que identifica un build de snapshots.
+
+    Combina la versión del esquema, el subset de claves de config que
+    afectan al output, los aeropuertos y un resumen del DataFrame
+    (rango temporal, número de filas, columnas presentes). Si cualquiera
+    de estos elementos cambia, el hash cambia y el caché se invalida.
+    """
+    graph_config = config.get("graph", {}) or {}
+    eval_config = config.get("evaluation", {}) or {}
+
+    relevant_graph = {
+        k: graph_config.get(k)
+        for k in (
+            "min_route_flights",
+            "temporal_window_hours",
+            "prediction_horizons",
+            "normalize_features",
+        )
+    }
+    relevant_eval = {"delay_threshold_minutes": eval_config.get("delay_threshold_minutes")}
+
+    flight_dates = pd.to_datetime(df["FlightDate"])
+    df_signature = {
+        "rows": int(len(df)),
+        "cols": sorted(map(str, df.columns)),
+        "date_min": str(flight_dates.min().date()),
+        "date_max": str(flight_dates.max().date()),
+    }
+
+    payload = {
+        "schema": GRAPH_SCHEMA_VERSION,
+        "graph": relevant_graph,
+        "eval": relevant_eval,
+        "airports": sorted(airports),
+        "df": df_signature,
+    }
+    blob = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
 def build_graph_dataset(
     df: pd.DataFrame,
     airports: list[str],
     config: dict,
 ) -> tuple[list[Data], dict[str, int]]:
     """Pipeline completo: de DataFrame a lista de grafos PyG.
+
+    Si ``config['graph']['cache_dir']`` apunta a un directorio, se usa
+    como caché de snapshots: el primer build escribe ``snapshots_<hash>.pt``
+    y los siguientes se cargan desde disco si la firma de entradas
+    (esquema + config + dataset + aeropuertos) no ha cambiado.
 
     Args:
         df: DataFrame preprocesado (con FlightDate, Hour, Origin, Dest, etc.).
@@ -1007,6 +1073,15 @@ def build_graph_dataset(
     """
     graph_config = config.get("graph", {})
     eval_config = config.get("evaluation", {})
+
+    cache_dir = graph_config.get("cache_dir")
+    cache_path: Path | None = None
+    if cache_dir:
+        cache_path = Path(cache_dir) / f"snapshots_{_snapshot_cache_key(df, airports, config)}.pt"
+        if cache_path.exists():
+            logger.info("Cargando snapshots desde caché: %s", cache_path)
+            payload = torch.load(cache_path, weights_only=False)
+            return payload["graphs"], payload["airport_map"]
 
     airport_map = build_airport_mapping(airports)
 
@@ -1038,6 +1113,14 @@ def build_graph_dataset(
         train_end = int(n * 0.7)
         train_indices = list(range(train_end))
         graphs, _ = normalize_graph_features(graphs, train_indices)
+
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {"graphs": graphs, "airport_map": airport_map, "schema": GRAPH_SCHEMA_VERSION},
+            cache_path,
+        )
+        logger.info("Snapshots cacheados en: %s", cache_path)
 
     return graphs, airport_map
 
