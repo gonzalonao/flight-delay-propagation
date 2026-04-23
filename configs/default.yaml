@@ -78,6 +78,7 @@ graph:
   temporal_window_hours: 1       # Resolución temporal de los snapshots
   input_window: 6                # Horas de historia como input
   prediction_horizons: [1, 2, 3, 4, 5]  # Horas futuras a predecir
+  cache_dir: data/processed/snapshots   # Caché de snapshots; null para desactivar
 
 model:
   name: dense_nn                 # dense_nn | lstm | basic_gcn | multi_horizon_gat | spatiotemporal_gnn | seq2seq_gnn
