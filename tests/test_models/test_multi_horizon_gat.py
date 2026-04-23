@@ -80,15 +80,15 @@ class TestMultiHorizonGAT:
         out = model(x, edge_index)
         assert out.shape == (4, 5)
 
-    def test_output_shape_with_edge_weight(self, simple_graph):
-        """Output correcto con pesos de aristas."""
+    def test_output_shape_with_edge_attr(self, simple_graph):
+        """Output correcto con edge_attr multi-canal."""
         x, edge_index = simple_graph
-        edge_weight = torch.ones(edge_index.shape[1])
+        edge_attr = torch.ones(edge_index.shape[1], 5)
         model = MultiHorizonGAT(
             input_dim=6, hidden_channels=16, num_heads=2,
-            num_layers=3, num_horizons=5,
+            num_layers=3, num_horizons=5, edge_dim=5,
         )
-        out = model(x, edge_index, edge_weight=edge_weight)
+        out = model(x, edge_index, edge_attr=edge_attr)
         assert out.shape == (4, 5)
 
     def test_single_horizon(self, simple_graph):
@@ -217,11 +217,12 @@ class TestMultiHorizonGraphBuilder:
         self, sample_flight_df, airport_map
     ):
         """Sin prediction_horizons, targets son [num_nodes] (retrocompatible)."""
-        edge_index, edge_weight = build_edge_index(
+        edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
         graphs = create_temporal_graphs(
-            sample_flight_df, airport_map, edge_index, edge_weight,
+            sample_flight_df, airport_map, edge_index,
+            edge_attr_static, edge_pairs,
             window_hours=6, delay_threshold=15.0,
             prediction_horizons=None,
         )
@@ -234,12 +235,13 @@ class TestMultiHorizonGraphBuilder:
         self, sample_flight_df, airport_map
     ):
         """Con prediction_horizons, targets son [num_nodes, num_horizons]."""
-        edge_index, edge_weight = build_edge_index(
+        edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
         horizons = [1, 2]
         graphs = create_temporal_graphs(
-            sample_flight_df, airport_map, edge_index, edge_weight,
+            sample_flight_df, airport_map, edge_index,
+            edge_attr_static, edge_pairs,
             window_hours=6, delay_threshold=15.0,
             prediction_horizons=horizons,
         )
@@ -252,11 +254,12 @@ class TestMultiHorizonGraphBuilder:
         self, sample_flight_df, airport_map
     ):
         """Con prediction_horizons=[1], se mantiene single-horizon [num_nodes]."""
-        edge_index, edge_weight = build_edge_index(
+        edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
         graphs = create_temporal_graphs(
-            sample_flight_df, airport_map, edge_index, edge_weight,
+            sample_flight_df, airport_map, edge_index,
+            edge_attr_static, edge_pairs,
             window_hours=6, delay_threshold=15.0,
             prediction_horizons=[1],
         )

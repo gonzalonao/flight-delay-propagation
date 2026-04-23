@@ -66,13 +66,13 @@ class GraphTrainer:
         """
         x = graph.x.to(self.device)
         edge_index = graph.edge_index.to(self.device)
-        edge_weight = None
-        if graph.edge_attr is not None:
-            edge_weight = graph.edge_attr.squeeze(-1).to(self.device)
+        edge_attr = (
+            graph.edge_attr.to(self.device) if graph.edge_attr is not None else None
+        )
         y = graph.y.to(self.device)
         active_mask = graph.active_mask.to(self.device)
 
-        logits = self.model(x, edge_index, edge_weight=edge_weight)
+        logits = self.model(x, edge_index, edge_attr=edge_attr)
 
         # Single-horizon: squeeze [N, 1] -> [N] para compatibilidad
         # Multi-horizon: mantener [N, H]

@@ -78,12 +78,19 @@ class TestBasicGCN:
         out = model(x, edge_index)
         assert out.shape == (4, 1)
 
-    def test_output_shape_with_edge_weight(self, simple_graph):
-        """Verifica output con pesos de aristas."""
+    def test_output_shape_with_edge_attr(self, simple_graph):
+        """Verifica output con edge_attr (1D legado y 2D multi-feature)."""
         x, edge_index = simple_graph
-        edge_weight = torch.ones(edge_index.shape[1])
         model = BasicGCN(input_dim=6, hidden_channels=16, num_layers=2)
-        out = model(x, edge_index, edge_weight=edge_weight)
+
+        # 1D (legado)
+        edge_attr_1d = torch.ones(edge_index.shape[1])
+        out = model(x, edge_index, edge_attr=edge_attr_1d)
+        assert out.shape == (4, 1)
+
+        # 2D multi-feature: GCN extrae la primera columna como peso
+        edge_attr_2d = torch.ones(edge_index.shape[1], 5)
+        out = model(x, edge_index, edge_attr=edge_attr_2d)
         assert out.shape == (4, 1)
 
     def test_gradients_flow(self, simple_graph):
@@ -141,32 +148,34 @@ class TestGraphBuilder:
         assert mapping["LAX"] < mapping["ORD"]
 
     def test_edge_index_shape(self, sample_flight_df, airport_map):
-        """Verifica que edge_index tiene el shape correcto."""
-        edge_index, edge_weight = build_edge_index(
+        """Verifica que edge_index y edge_attr_static tienen shape coherente."""
+        edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
         assert edge_index.shape[0] == 2
-        assert edge_index.shape[1] == edge_weight.shape[0]
+        assert edge_index.shape[1] == edge_attr_static.shape[0]
+        assert edge_attr_static.shape[1] == 3
+        assert len(edge_pairs) == edge_index.shape[1]
         # Bidireccional: num_edges debe ser par
         assert edge_index.shape[1] % 2 == 0
 
-    def test_edge_weight_normalized(self, sample_flight_df, airport_map):
-        """Verifica que los pesos están normalizados al rango [0, 1]."""
-        _, edge_weight = build_edge_index(
+    def test_edge_attr_static_normalized(self, sample_flight_df, airport_map):
+        """Las features estáticas (count, air_time, distance) están en [0, 1]."""
+        _, edge_attr_static, _ = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
-        assert edge_weight.max() <= 1.0
-        assert edge_weight.min() >= 0.0
+        assert edge_attr_static.max() <= 1.0 + 1e-6
+        assert edge_attr_static.min() >= 0.0
 
     def test_min_flights_filter(self, sample_flight_df, airport_map):
         """Con min_flights alto, deben crearse menos aristas."""
-        _, weights_low = build_edge_index(
+        _, attrs_low, _ = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
-        _, weights_high = build_edge_index(
+        _, attrs_high, _ = build_edge_index(
             sample_flight_df, airport_map, min_flights=100
         )
-        assert len(weights_high) <= len(weights_low)
+        assert attrs_high.shape[0] <= attrs_low.shape[0]
 
     def test_node_features_shape(self, sample_flight_df, airport_map):
         """Verifica shape de features por nodo."""
@@ -188,11 +197,12 @@ class TestGraphBuilder:
 
     def test_temporal_graphs_created(self, sample_flight_df, airport_map):
         """Verifica que se crean snapshots temporales."""
-        edge_index, edge_weight = build_edge_index(
+        edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
         graphs = create_temporal_graphs(
-            sample_flight_df, airport_map, edge_index, edge_weight,
+            sample_flight_df, airport_map, edge_index,
+            edge_attr_static, edge_pairs,
             window_hours=6, delay_threshold=15.0,
         )
         # Con 5 días de datos y ventanas de 6h, debería haber múltiples grafos

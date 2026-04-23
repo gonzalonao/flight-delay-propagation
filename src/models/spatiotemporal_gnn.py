@@ -15,22 +15,26 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.nn import GATConv
+from torch_geometric.nn import GATv2Conv
 
 
 class GATEncoder(nn.Module):
-    """Spatial encoder using Graph Attention Network layers.
+    """Spatial encoder using Graph Attention v2 layers with edge attrs.
 
-    Replicates the convolutional architecture from MultiHorizonGAT
-    (GATConv + BatchNorm + ELU + dropout) without the prediction head.
-    Produces per-node spatial embeddings of dimension ``hidden_channels``.
+    Stacks ``GATv2Conv`` blocks with BatchNorm + ELU + dropout. The
+    layers consume per-edge attribute vectors of dimension ``edge_dim``
+    (the 5-channel edge tensor produced by ``graph_builder``).
 
     Args:
         input_dim: Number of node features.
         hidden_channels: Hidden dimension per attention head.
         num_heads: Number of attention heads.
-        num_layers: Number of GATConv layers.
+        num_layers: Number of GATv2Conv layers.
         dropout: Dropout probability.
+        edge_dim: Last-dimension size of ``edge_attr``. ``None`` (default)
+            disables edge features and is the safe choice for unit tests
+            with synthetic graphs that do not include edge attributes;
+            the production factory passes ``edge_dim=5`` explicitly.
     """
 
     def __init__(
@@ -40,22 +44,25 @@ class GATEncoder(nn.Module):
         num_heads: int = 4,
         num_layers: int = 2,
         dropout: float = 0.3,
+        edge_dim: int | None = None,
     ) -> None:
         super().__init__()
 
         self.dropout = dropout
+        self.edge_dim = edge_dim
 
         self.convs = nn.ModuleList()
         self.bns = nn.ModuleList()
 
         # First layer: input_dim -> hidden_channels * num_heads
         self.convs.append(
-            GATConv(
+            GATv2Conv(
                 input_dim,
                 hidden_channels,
                 heads=num_heads,
                 dropout=dropout,
                 concat=True,
+                edge_dim=edge_dim,
             )
         )
         self.bns.append(nn.BatchNorm1d(hidden_channels * num_heads))
@@ -63,12 +70,13 @@ class GATEncoder(nn.Module):
         # Intermediate layers
         for _ in range(num_layers - 2):
             self.convs.append(
-                GATConv(
+                GATv2Conv(
                     hidden_channels * num_heads,
                     hidden_channels,
                     heads=num_heads,
                     dropout=dropout,
                     concat=True,
+                    edge_dim=edge_dim,
                 )
             )
             self.bns.append(nn.BatchNorm1d(hidden_channels * num_heads))
@@ -76,12 +84,13 @@ class GATEncoder(nn.Module):
         # Last layer: average heads (concat=False)
         if num_layers > 1:
             self.convs.append(
-                GATConv(
+                GATv2Conv(
                     hidden_channels * num_heads,
                     hidden_channels,
                     heads=num_heads,
                     dropout=dropout,
                     concat=False,
+                    edge_dim=edge_dim,
                 )
             )
             self.bns.append(nn.BatchNorm1d(hidden_channels))
@@ -90,20 +99,24 @@ class GATEncoder(nn.Module):
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
-        edge_weight: torch.Tensor | None = None,
+        edge_attr: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Encode node features via graph attention.
 
         Args:
             x: Node features [num_nodes, input_dim].
             edge_index: Edge indices [2, num_edges].
-            edge_weight: Edge weights [num_edges] (optional).
+            edge_attr: Edge attributes [num_edges, edge_dim] (optional).
+                A 1D tensor is automatically promoted to ``[E, 1]``.
 
         Returns:
             Node embeddings [num_nodes, hidden_channels].
         """
+        if edge_attr is not None and edge_attr.dim() == 1:
+            edge_attr = edge_attr.unsqueeze(-1)
+
         for conv, bn in zip(self.convs, self.bns):
-            x = conv(x, edge_index, edge_attr=edge_weight)
+            x = conv(x, edge_index, edge_attr=edge_attr)
             x = bn(x)
             x = F.elu(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
@@ -128,6 +141,9 @@ class SpatioTemporalGNN(nn.Module):
         num_gnn_layers: Number of GATConv layers in the encoder.
         num_horizons: Number of future horizons to predict.
         dropout: Dropout probability.
+        edge_dim: Edge attribute dimension forwarded to ``GATEncoder``.
+            ``None`` disables edge features (default for tests); the
+            production factory wires ``edge_dim=5``.
     """
 
     def __init__(
@@ -139,6 +155,7 @@ class SpatioTemporalGNN(nn.Module):
         num_gnn_layers: int = 2,
         num_horizons: int = 5,
         dropout: float = 0.3,
+        edge_dim: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -152,6 +169,7 @@ class SpatioTemporalGNN(nn.Module):
             num_heads=num_heads,
             num_layers=num_gnn_layers,
             dropout=dropout,
+            edge_dim=edge_dim,
         )
 
         self.lstm = nn.LSTM(
@@ -181,11 +199,7 @@ class SpatioTemporalGNN(nn.Module):
         """
         embeddings = []
         for graph in sequence:
-            edge_weight = None
-            if graph.edge_attr is not None:
-                edge_weight = graph.edge_attr.squeeze(-1)
-
-            emb = self.encoder(graph.x, graph.edge_index, edge_weight)
+            emb = self.encoder(graph.x, graph.edge_index, graph.edge_attr)
             embeddings.append(emb)
 
         # Stack: list of [N, gnn_hidden] -> [N, T, gnn_hidden]

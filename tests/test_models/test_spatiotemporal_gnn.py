@@ -23,7 +23,7 @@ def simple_graph():
         [[0, 1, 1, 2, 2, 3, 0, 3],
          [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long
     )
-    edge_attr = torch.ones(edge_index.shape[1], 1)
+    edge_attr = torch.ones(edge_index.shape[1], 5)
     y = torch.randn(num_nodes, num_horizons)
     active_mask = torch.tensor([True, True, True, False])
     return Data(
@@ -53,7 +53,7 @@ def graph_list():
         g = Data(
             x=torch.randn(num_nodes, 6),
             edge_index=torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
-            edge_attr=torch.ones(3, 1),
+            edge_attr=torch.ones(3, 5),
             y=torch.randn(num_nodes, 5),
             active_mask=torch.ones(num_nodes, dtype=torch.bool),
         )
@@ -75,13 +75,15 @@ class TestGATEncoder:
         out = encoder(simple_graph.x, simple_graph.edge_index)
         assert out.shape == (4, 16)
 
-    def test_with_edge_weight(self, simple_graph):
-        """Funciona con pesos de aristas."""
+    def test_with_edge_attr(self, simple_graph):
+        """Funciona con edge_attr multi-canal."""
         encoder = GATEncoder(
             input_dim=6, hidden_channels=16, num_heads=2, num_layers=2,
+            edge_dim=5,
         )
-        edge_weight = simple_graph.edge_attr.squeeze(-1)
-        out = encoder(simple_graph.x, simple_graph.edge_index, edge_weight)
+        out = encoder(
+            simple_graph.x, simple_graph.edge_index, simple_graph.edge_attr,
+        )
         assert out.shape == (4, 16)
 
     def test_single_layer(self):

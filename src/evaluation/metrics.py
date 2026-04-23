@@ -196,13 +196,13 @@ def evaluate_multi_horizon_graph_model(
     for graph in graphs:
         x = graph.x.to(device)
         edge_index = graph.edge_index.to(device)
-        edge_weight = None
-        if graph.edge_attr is not None:
-            edge_weight = graph.edge_attr.squeeze(-1).to(device)
+        edge_attr = (
+            graph.edge_attr.to(device) if graph.edge_attr is not None else None
+        )
         mask = graph.active_mask
 
         # Salida [num_nodes, num_horizons]
-        preds = model(x, edge_index, edge_weight=edge_weight)
+        preds = model(x, edge_index, edge_attr=edge_attr)
         preds = preds.cpu().numpy()
 
         targets_np = graph.y.numpy()
@@ -360,13 +360,13 @@ def evaluate_graph_model(
     for graph in graphs:
         x = graph.x.to(device)
         edge_index = graph.edge_index.to(device)
-        edge_weight = None
-        if graph.edge_attr is not None:
-            edge_weight = graph.edge_attr.squeeze(-1).to(device)
+        edge_attr = (
+            graph.edge_attr.to(device) if graph.edge_attr is not None else None
+        )
         mask = graph.active_mask
 
         # Salida directa del modelo (regresión, sin sigmoid)
-        preds = model(x, edge_index, edge_weight=edge_weight).squeeze(-1)
+        preds = model(x, edge_index, edge_attr=edge_attr).squeeze(-1)
         preds = preds.cpu().numpy()
 
         all_predictions.append(preds[mask.numpy()])
