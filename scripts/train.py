@@ -24,7 +24,7 @@ from src.data.graph_builder import (
     create_temporal_sequences,
     split_graphs_temporal,
 )
-from src.data.loader import load_flight_data
+from src.data.loader import load_multiple_years
 from src.data.preprocessing import preprocess_pipeline
 from src.evaluation.metrics import (
     evaluate_graph_model,
@@ -330,6 +330,14 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
     train_features, train_targets = splits["train"]
     val_features, val_targets = splits["val"]
 
+    if len(val_features) == 0:
+        raise RuntimeError(
+            f"Split tabular de validación vacío (train={len(train_features)}, "
+            f"val=0, test={len(splits['test'][0])}). Verifica que los años "
+            f"{config['data'].get('years')} cubran los cortes cronológicos "
+            f"{config.get('split', {})}."
+        )
+
     train_dataset = FlightDelayDataset(train_features, train_targets)
     val_dataset = FlightDelayDataset(val_features, val_targets)
 
@@ -413,6 +421,23 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
             "No hay grafos de entrenamiento. Revisa los datos y la configuración."
         )
         return
+
+    if not val_graphs:
+        # Sin val_graphs el trainer devuelve val_loss=0.0 silenciosamente
+        # en cada epoch (división por max(0,1)=1) y el early stopping nunca
+        # dispara. Falla con un mensaje claro indicando la causa típica:
+        # los cortes cronológicos del split no encuentran datos en disco.
+        split_cfg_str = (
+            f"train_end={split_cfg.get('train_end')}, "
+            f"val_end={split_cfg.get('val_end')}"
+        )
+        raise RuntimeError(
+            f"Split de validación vacío (grafos_total={len(graphs)}, "
+            f"train={len(train_graphs)}, val=0, test={len(graph_splits['test'])}, "
+            f"{split_cfg_str}). Causa típica: el config declara "
+            f"years={config['data'].get('years')} pero sólo está descargado "
+            f"un subconjunto. Verifica los archivos en {get_data_dir('raw', config)}."
+        )
 
     # El input_dim viene de las node features del primer grafo;
     # edge_dim de las edge_attr (None si no hay).
@@ -507,6 +532,17 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
     val_sequences = create_temporal_sequences(
         graph_splits["val"], input_window
     )
+
+    if not val_sequences:
+        # Misma lógica que en _train_graph: val vacío -> val_loss=0 silente.
+        raise RuntimeError(
+            f"Split de validación vacío en secuencias "
+            f"(grafos_val={len(graph_splits['val'])}, "
+            f"input_window={input_window}). Verifica que el rango de fechas "
+            f"{config.get('split', {}).get('train_end')} → "
+            f"{config.get('split', {}).get('val_end')} esté cubierto por los "
+            f"años descargados ({config['data'].get('years')})."
+        )
 
     if not train_sequences:
         logger.error(
@@ -608,9 +644,15 @@ def main() -> None:
     logger.info("Cargando datos: años=%s, muestreo=%.1f%%",
                 years, (sample_frac or 1.0) * 100)
 
-    year = years[0]
-    df = load_flight_data(data_dir, year, columns=columns,
-                          sample_frac=sample_frac, random_seed=seed)
+    # Carga TODOS los años del config — el corte cronológico de los splits
+    # (train < train_end < val < val_end ≤ test) requiere que estén presentes
+    # las fechas que caen en cada bucket. Si el config dice [2018, 2019] pero
+    # sólo se carga 2018, val/test quedan vacíos y val_loss=0 silenciosamente.
+    df = load_multiple_years(
+        data_dir, years, columns=columns,
+        sample_frac=sample_frac, random_seed=seed,
+        skip_missing=True,
+    )
 
     # --- Preprocesamiento ---
     top_n = config.get("graph", {}).get("top_n_airports", 30)
