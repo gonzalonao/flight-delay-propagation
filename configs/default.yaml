@@ -107,10 +107,15 @@ model:
     num_gnn_layers: 2
     dropout: 0.3
   seq2seq_gnn:
-    gnn_hidden: 64
-    lstm_hidden: 128
+    # Spatio-Temporal Transformer redesigned in W3:
+    #   - GAT spatial encoder con residuales pre-norm + GELU
+    #   - Transformer temporal encoder (sustituye al LSTM)
+    #   - Decoder de queries por horizonte (sin teacher forcing)
+    # ``hidden_dim`` debe ser divisible por ``num_heads``.
+    hidden_dim: 128
     num_heads: 4
-    num_gnn_layers: 2
+    num_spatial_layers: 3
+    num_temporal_layers: 2
     dropout: 0.3
 
 training:
