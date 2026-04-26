@@ -89,7 +89,16 @@ def _make_config(model_name: str) -> dict:
 
 
 def _make_snapshot() -> Data:
-    """Crea un único snapshot PyG con node features y edge_attr."""
+    """Crea un único snapshot PyG con node features y edge_attr.
+
+    ``edge_attr`` se genera con ``torch.rand`` (uniforme en [0, 1)) para
+    que la columna 0 — usada por ``BasicGCN`` como ``edge_weight`` — sea
+    no-negativa. ``GCNConv`` normaliza con ``D^(-1/2) A D^(-1/2)``: pesos
+    negativos producen grados negativos, ``sqrt`` devuelve NaN y la loss
+    se rompe. En producción todas las features de arista de la columna 0
+    (``flight_count_norm``) son no-negativas por construcción, así que
+    el test refleja ese contrato.
+    """
     x = torch.randn(NUM_NODES, INPUT_DIM)
     # Cadena dirigida 0→1→2→3→4 + 3 aristas extra para densidad mínima.
     edge_index = torch.tensor(
@@ -97,7 +106,7 @@ def _make_snapshot() -> Data:
          [1, 2, 3, 4, 2, 4, 0, 3]],
         dtype=torch.long,
     )
-    edge_attr = torch.randn(NUM_EDGES, EDGE_DIM)
+    edge_attr = torch.rand(NUM_EDGES, EDGE_DIM)
     y = torch.randn(NUM_NODES, NUM_HORIZONS)
     return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
 
