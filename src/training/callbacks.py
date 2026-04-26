@@ -53,10 +53,20 @@ class ModelCheckpoint:
 
     Args:
         path: Ruta donde guardar el checkpoint.
+        model_name: Identificador lógico del modelo (e.g.,
+            ``"multi_horizon_gat"``). Si se proporciona, se persiste en el
+            checkpoint para que ``load_checkpoint`` pueda validar la
+            arquitectura al cargar y dar errores claros si el ``--config``
+            de evaluación no coincide.
     """
 
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(
+        self,
+        path: str | None = None,
+        model_name: str | None = None,
+    ) -> None:
         self.path = path
+        self.model_name = model_name
         self.best_loss: float | None = None
 
     def step(
@@ -85,5 +95,6 @@ class ModelCheckpoint:
                 epoch=epoch,
                 metrics={"val_loss": val_loss},
                 path=self.path,
+                model_name=self.model_name,
             )
             logger.info("  Mejor modelo guardado (val_loss=%.4f)", val_loss)

@@ -376,6 +376,7 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
         epochs=training_config.get("epochs", 100),
         patience=training_config.get("patience", 15),
         checkpoint_path=checkpoint_path,
+        model_name=config["model"]["name"],
     )
 
     # Evaluación final
@@ -481,6 +482,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
         epochs=training_config.get("epochs", 100),
         patience=training_config.get("patience", 15),
         checkpoint_path=checkpoint_path,
+        model_name=model_name,
     )
 
     # Evaluación final sobre grafos de test
@@ -600,6 +602,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         epochs=training_config.get("epochs", 100),
         patience=training_config.get("patience", 15),
         checkpoint_path=checkpoint_path,
+        model_name=model_name,
     )
 
     # Evaluación final sobre secuencias de test
