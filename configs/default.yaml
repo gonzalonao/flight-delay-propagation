@@ -122,6 +122,10 @@ training:
   patience: 15                   # Early stopping
   gradient_clip: 1.0
   num_workers: 4
+  device: auto                   # auto | cuda | cpu — ver GPU_SETUP.md.
+                                 # 'cuda' falla duro si no hay GPU disponible
+                                 # (recomendado para evitar runs en CPU
+                                 # silenciosos). 'auto' cae a CPU con warning.
 
 evaluation:
   metrics: [mae, rmse, mape, r2]

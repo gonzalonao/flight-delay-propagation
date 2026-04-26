@@ -41,6 +41,7 @@ from src.training.graph_trainer import GraphTrainer, SequenceGraphTrainer
 from src.training.losses import WeightedHuberLoss, WeightedMSELoss
 from src.training.trainer import Trainer
 from src.utils.config import load_config
+from src.utils.device import select_device
 from src.utils.io import get_data_dir, get_output_dir
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
@@ -351,8 +352,7 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
                 config["model"]["name"],
                 sum(p.numel() for p in model.parameters()))
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Dispositivo: %s", device)
+    device = select_device(config)
 
     training_config = config["training"]
     optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
@@ -457,8 +457,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
         edge_dim,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Dispositivo: %s", device)
+    device = select_device(config)
 
     training_config = config["training"]
     optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
@@ -577,8 +576,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         edge_dim,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Dispositivo: %s", device)
+    device = select_device(config)
 
     training_config = config["training"]
     optimizer, scheduler = _build_optimizer_and_scheduler(model, config)
