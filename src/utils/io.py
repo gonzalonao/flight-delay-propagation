@@ -74,6 +74,7 @@ def save_checkpoint(
     epoch: int,
     metrics: dict[str, float],
     path: str | Path,
+    model_name: str | None = None,
 ) -> None:
     """Guarda un checkpoint del modelo con estado del optimizador y métricas.
 
@@ -83,40 +84,77 @@ def save_checkpoint(
         epoch: Época actual del entrenamiento.
         metrics: Diccionario con métricas de evaluación.
         path: Ruta donde guardar el checkpoint.
+        model_name: Identificador lógico del modelo (e.g., "multi_horizon_gat").
+            Si se proporciona, ``load_checkpoint`` puede validar que el
+            modelo destino tenga la misma arquitectura, evitando errores
+            crípticos de ``state_dict`` cuando el usuario olvida pasar el
+            ``--config`` correcto a ``evaluate.py``.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "metrics": metrics,
-        },
-        path,
-    )
+    payload: dict[str, Any] = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "metrics": metrics,
+    }
+    if model_name is not None:
+        payload["model_name"] = model_name
+
+    torch.save(payload, path)
 
 
 def load_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
+    expected_model_name: str | None = None,
 ) -> dict[str, Any]:
     """Carga un checkpoint y restaura el estado del modelo y optimizador.
+
+    Si el checkpoint trae ``model_name`` y se pasa ``expected_model_name``,
+    se valida la coincidencia ANTES de intentar ``load_state_dict`` para dar
+    un error claro en vez del críptico ``Missing/Unexpected keys`` de
+    PyTorch (que aparece típicamente cuando se evalúa un checkpoint sin
+    pasar el ``--config`` correcto).
 
     Args:
         path: Ruta al archivo de checkpoint.
         model: Modelo donde cargar los pesos.
         optimizer: Optimizador donde restaurar el estado (opcional).
+        expected_model_name: Nombre esperado del modelo (opcional). Si el
+            checkpoint registra un nombre distinto, lanza ``ValueError``.
 
     Returns:
-        Diccionario con epoch y métricas del checkpoint.
+        Diccionario con ``epoch``, ``metrics`` y, si está disponible,
+        ``model_name``.
     """
     checkpoint = torch.load(path, weights_only=False)
+
+    saved_model_name = checkpoint.get("model_name")
+    if (
+        expected_model_name is not None
+        and saved_model_name is not None
+        and saved_model_name != expected_model_name
+    ):
+        raise ValueError(
+            f"Mismatch de arquitectura al cargar checkpoint '{path}': "
+            f"el checkpoint corresponde a model_name='{saved_model_name}' "
+            f"pero la configuración pasada construye '{expected_model_name}'. "
+            f"Pasa --config configs/{saved_model_name}.yaml o el config "
+            f"original con el que se entrenó."
+        )
+
     model.load_state_dict(checkpoint["model_state_dict"])
 
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-    return {"epoch": checkpoint["epoch"], "metrics": checkpoint["metrics"]}
+    result: dict[str, Any] = {
+        "epoch": checkpoint["epoch"],
+        "metrics": checkpoint["metrics"],
+    }
+    if saved_model_name is not None:
+        result["model_name"] = saved_model_name
+    return result
