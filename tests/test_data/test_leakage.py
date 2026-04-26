@@ -20,8 +20,12 @@ from src.data.graph_builder import build_graph_dataset
 
 # Sentinel grande y único: si aparece (incluso atenuado) en una feature de
 # un snapshot cuyo current_end está antes del arr_timestamp del vuelo
-# futuro, hay leakage.
-LEAK_SENTINEL = 999.0
+# futuro, hay leakage. Se elige un valor varios órdenes de magnitud por
+# encima de cualquier escala legítima del dataset (Distance hasta ~5000
+# millas, ActualElapsedTime hasta ~600 min, retrasos típicos <300 min)
+# para que la propagación del sentinel sea inconfundible y no colisione
+# con features Class A inocuas como ``scheduled_mean_distance_in_hN``.
+LEAK_SENTINEL = 1_000_000.0
 
 
 def _make_synthetic_df(
@@ -113,11 +117,12 @@ def test_node_features_do_not_leak_future_arr_delay(synthetic_config):
         if current_end > sentinel_arr_ts:
             continue
         features_bbb = g.x[bbb_idx].numpy()
-        # Cualquier feature derivada del sentinel ArrDelay=999 estaría en
-        # el orden de magnitud del valor (>=100). Las features legítimas
-        # se mantienen en magnitudes pequeñas (delays normales <60min,
-        # encodings cíclicos en [-1, 1]).
-        assert np.all(np.abs(features_bbb) < 100.0), (
+        # Cualquier feature derivada del sentinel ArrDelay=1e6 estaría en
+        # ese orden de magnitud (>=1e5 incluso después de promediar). Las
+        # features legítimas máximas son las exógenas Class A que pueden
+        # llevar Distance/ElapsedTime crudos (escala ~1e3); el umbral
+        # 1e5 las excluye sin sacrificar sensibilidad al leak.
+        assert np.all(np.abs(features_bbb) < 1e5), (
             f"Posible leakage en BBB en snapshot current_end={current_end}: "
             f"features={features_bbb}"
         )
@@ -166,7 +171,7 @@ def test_targets_do_use_future_window(synthetic_config):
         if current_end == pd.Timestamp("2018-01-01 18:00"):
             y = g.y  # [N, num_horizons]
             # h_idx=1 corresponde a horizons[1]=2.
-            assert y[bbb, 1].item() > 100.0, (
+            assert y[bbb, 1].item() > 1e5, (
                 f"Target h=2 de BBB no captura el vuelo sentinel: y={y[bbb]}"
             )
             found = True
