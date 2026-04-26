@@ -1,14 +1,22 @@
 # =============================================================================
-# Configuración Seq2SeqGNN - GAT + Encoder/Decoder LSTM (Strategy 3)
+# Configuración Seq2SeqGNN - Spatio-Temporal Transformer + horizon-query decoder
 # =============================================================================
 # Uso: python scripts/train.py --config configs/seq2seq_gnn.yaml
 #
+# Esta configuración refleja el rediseño del workstream W3:
+#   - Encoder espacial GATv2 con residuales pre-norm, LayerNorm y GELU.
+#   - Encoder temporal Transformer de 2 capas con positional encoding
+#     sinusoidal (sustituye al LSTM).
+#   - Decoder con embeddings de query por horizonte que cross-atienden a
+#     la secuencia temporal por nodo. Sin teacher forcing ni decodificación
+#     autoregresiva (el modelo es idéntico en train y eval salvo dropout).
+#
 # Diferencias respecto a spatiotemporal_gnn.yaml:
-#   - model: seq2seq_gnn (encoder-decoder, no direct multi-output)
-#   - Teacher forcing durante entrenamiento, autoregresivo en inferencia
-#   - Cabeza de salida por horizonte (separate Linear per step)
-#   - learning_rate ligeramente mayor: el decoder step-by-step converge
-#     más lento que el modelo directo, necesita más gradiente por época
+#   - model: seq2seq_gnn (decoder de queries por horizonte, no multi-output
+#     directo desde un único hidden state).
+#   - Sin teacher forcing → no hay distribution shift entre train e inference.
+#   - learning_rate ligeramente mayor para el head MLP, que parte de
+#     queries con init pequeña (std=0.02 estilo BERT).
 
 data:
   raw_dir: data/raw
@@ -81,10 +89,12 @@ graph:
 model:
   name: seq2seq_gnn
   seq2seq_gnn:
-    gnn_hidden: 64
-    lstm_hidden: 128
+    # ``hidden_dim`` es el embedding compartido por encoder espacial,
+    # encoder temporal y decoder. Debe ser divisible por ``num_heads``.
+    hidden_dim: 128
     num_heads: 4
-    num_gnn_layers: 2
+    num_spatial_layers: 3   # GATv2 layers con residuales pre-norm
+    num_temporal_layers: 2  # capas del Transformer temporal
     dropout: 0.3
 
 training:

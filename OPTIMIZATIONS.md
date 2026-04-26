@@ -61,11 +61,11 @@
 - [ ] Sinusoidal positional encoding on LSTM input
 
 ### Seq2SeqGNN redesign (replaces autoregressive decoder)
-- [ ] LSTM temporal encoder → 2-layer Transformer encoder (d_model=128, nhead=4)
-- [ ] Autoregressive LSTM decoder → horizon-query MultiheadAttention decoder
-- [ ] 5 separate Linear heads → single MLP applied to 5 attended queries
-- [ ] Drop teacher forcing entirely (no train/eval distribution shift)
-- [ ] Add learnable horizon-query embeddings Q ∈ R^{5×128}
+- [x] LSTM temporal encoder → 2-layer Transformer encoder (d_model=128, nhead=4)  // applied in W3 commit; pre-norm, batch_first, GELU, dim_feedforward=2*d
+- [x] Autoregressive LSTM decoder → horizon-query MultiheadAttention decoder  // applied in W3 commit; cross-attn con residual + LayerNorm sobre las queries
+- [x] 5 separate Linear heads → single MLP applied to 5 attended queries  // applied in W3 commit; head = Linear→GELU→Dropout→Linear(1)
+- [x] Drop teacher forcing entirely (no train/eval distribution shift)  // applied in W3 commit; el forward ignora ``y`` por completo
+- [x] Add learnable horizon-query embeddings Q ∈ R^{5×128}  // applied in W3 commit; init BERT-style std=0.02
 
 ## Training infrastructure
 - [ ] CUDA 12.8 wheels + RTX 5070 enabled
@@ -75,15 +75,15 @@
 - [ ] Gradient clip 1.0 (existing — confirm retained)
 
 ## Code hygiene (no accuracy impact, affects iteration speed)
-- [ ] Single model factory in src/models/factory.py
-- [ ] Single results reporter in src/evaluation/reporting.py
+- [x] Single model factory in src/models/factory.py  // applied in commit 2172eec; elimina divergencia detectada (evaluate.py no propagaba ``activation`` a DenseNN)
+- [x] Single results reporter in src/evaluation/reporting.py  // applied in commit 2172eec; train.py + evaluate.py importan log_test_results / log_multi_horizon_results
 - [ ] BaseTrainer + 2 subclasses (collapse 3 trainer classes)
 - [ ] Remove abandoned LSTM stub from configs and README
 - [ ] Lightweight per-model dataclass for config validation
 
 ## Verification
 - [x] Leakage unit test (tests/test_data/test_leakage.py)  // applied in commit G; sentinel ArrDelay=999 verifica nodos+edges; reveló que window_df necesitaba filtro arr_timestamp<T
-- [ ] Per-model smoke test on mock data (tests/test_integration.py)
+- [x] Per-model smoke test on mock data (tests/test_integration.py)  // applied in commits 2172eec + 9abed7b; 5 modelos, datos sintéticos, expuso bug de GATEncoder con num_layers=1
 - [ ] Populated notebooks/03_results.ipynb with comparison table & MAE-vs-horizon plot
 
 ## Suggested ablation order (when accuracy underwhelms)

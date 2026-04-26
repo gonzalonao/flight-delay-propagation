@@ -1,196 +1,331 @@
-"""Seq2Seq Spatio-Temporal GNN for multi-horizon delay propagation.
+"""Spatio-Temporal Transformer for multi-horizon delay propagation.
 
-Alternative to SpatioTemporalGNN (Strategy 2). Implements Strategy 3
-(encoder-decoder seq2seq) from the multi-step forecasting literature:
+Redesign of the previous Seq2SeqGNN per workstream W3 of the project
+reset plan. The class name and module path are preserved on purpose —
+existing configs (``model.name: seq2seq_gnn``) and checkpoints with
+``model_name="seq2seq_gnn"`` keep working — but the internals are
+entirely different.
 
-    1. Shared GAT encoder extracts spatial embeddings per snapshot.
-    2. Encoder LSTM compresses the 6-step history into a context vector
-       (h_n, c_n).
-    3. Decoder LSTM unrolls N decoding steps, each producing one horizon's
-       delay prediction. Each step is conditioned on the previous
-       prediction (autoregressive) or the previous target (teacher forcing
-       during training).
-    4. Per-horizon Linear heads project the decoder hidden state to a
-       scalar delay prediction.
+Architecture
+------------
 
-The decoder generating predictions step-by-step explicitly models delay
-cascading dynamics, which the direct multi-output head of
-SpatioTemporalGNN cannot capture.
+1. **Spatial encoder.** Three stacked ``GATv2Conv`` layers with
+   pre-norm residual connections, ``LayerNorm`` and ``GELU``. The
+   layers consume per-edge attribute vectors of dimension
+   ``edge_dim`` (the 5-channel edge tensor produced by the graph
+   builder). Pre-norm + residuals stabilise gradients and counteract
+   the over-smoothing tendency of stacked GAT layers — both real
+   problems with the previous deep-but-skip-less stack.
 
-Training uses teacher forcing (ground-truth previous horizon as input).
-Inference (eval mode) uses fully autoregressive decoding.
+2. **Temporal encoder.** The per-snapshot embeddings are stacked into
+   a ``[N, T, d]`` tensor, augmented with sinusoidal positional
+   encoding over the ``T`` timesteps, and processed by a 2-layer
+   pre-norm Transformer encoder. This replaces the previous single-
+   layer LSTM. Self-attention captures longer-range temporal
+   dependencies, parallelises over ``T`` and avoids the LSTM's serial
+   gradient bottleneck.
+
+3. **Horizon-query decoder.** ``num_horizons`` learnable query
+   embeddings cross-attend to the per-node temporal sequence via a
+   single ``MultiheadAttention`` block. A 2-layer MLP head projects
+   each attended query to a scalar prediction. There is **no
+   autoregression** and **no teacher forcing**, so the model behaves
+   identically in train and eval modes (only dropout differs).
+
+Why this should beat the old design on long horizons (4/6/8 h)
+---------------------------------------------------------------
+
+* **No autoregressive error propagation.** The 8 h prediction does
+  not consume the 6 h prediction, so an early miss does not cascade.
+* **Edge-aware spatial attention.** ``GATv2Conv`` consumes the new
+  ``edge_dim`` features, letting the model weight neighbours by
+  scheduled-flight count, recent route delay, etc.
+* **Pre-norm residuals + LayerNorm.** Fix the gradient-flow / over-
+  smoothing issues of the previous stack; let the encoder go deeper
+  without collapsing node representations.
+* **Horizon queries.** The decoder is explicitly aware of *which*
+  horizon it is predicting; the previous decoder treated all five
+  outputs as a single dense vector with no horizon-positional
+  information.
 """
+
+from __future__ import annotations
+
+import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch_geometric.data import Data
+from torch_geometric.nn import GATv2Conv
 
-from src.models.spatiotemporal_gnn import GATEncoder
+
+class _SinusoidalPositionalEncoding(nn.Module):
+    """Standard sinusoidal positional encoding (Vaswani et al., 2017).
+
+    Registered as a non-trainable, non-persistent buffer; sliced to the
+    actual sequence length on the fly so a single instance supports any
+    ``T <= max_len``.
+    """
+
+    def __init__(self, d_model: int, max_len: int = 512) -> None:
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2, dtype=torch.float)
+            * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        # When d_model is odd the cos slice is one element shorter — clip
+        # div_term to match. d_model is always even in production but the
+        # smoke tests sometimes use small odd values for speed.
+        pe[:, 1::2] = torch.cos(position * div_term[: pe[:, 1::2].shape[1]])
+        self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [batch, seq, d_model]
+        return x + self.pe[:, : x.size(1)]
 
 
-class Seq2SeqGNN(nn.Module):
-    """Seq2Seq encoder-decoder over spatio-temporal graph sequences.
+class SpatialGATEncoder(nn.Module):
+    """Pre-norm residual stack of ``GATv2Conv`` layers.
+
+    Layout (after the input projection)::
+
+        h = LayerNorm(x)
+        h = GATv2Conv(h, edge_index, edge_attr)
+        h = GELU(h)
+        h = Dropout(h)
+        x = x + h
+
+    Pre-norm + residuals stabilise gradients and counteract the over-
+    smoothing tendency of stacked GAT layers. The first layer is a
+    non-residual projection ``input_dim -> hidden_dim`` because the
+    residual sum needs matching shapes.
 
     Args:
-        input_dim: Number of node features per snapshot.
-        gnn_hidden: Hidden dimension for the shared GAT encoder.
-        lstm_hidden: Hidden dimension for both encoder and decoder LSTM.
-        num_heads: Number of GAT attention heads.
-        num_gnn_layers: Number of GATConv layers in the encoder.
-        num_horizons: Number of decoding steps (future horizons).
+        input_dim: Node feature dimensionality.
+        hidden_dim: Hidden / output embedding dimension. ``concat=False``
+            on every layer means the head dimension is averaged so output
+            stays at ``hidden_dim`` regardless of ``num_heads``.
+        num_heads: Number of attention heads per layer.
+        num_layers: Total number of GATv2 layers (>= 1). The first is
+            the projection, the remaining ``num_layers - 1`` are residual.
         dropout: Dropout probability.
-        edge_dim: Edge attribute dimension forwarded to ``GATEncoder``.
+        edge_dim: Last-dimension size of ``edge_attr``. ``None`` disables
+            edge features (safe default for synthetic unit tests); the
+            production factory wires ``edge_dim=5``.
     """
 
     def __init__(
         self,
         input_dim: int,
-        gnn_hidden: int = 64,
-        lstm_hidden: int = 128,
+        hidden_dim: int = 128,
         num_heads: int = 4,
-        num_gnn_layers: int = 2,
+        num_layers: int = 3,
+        dropout: float = 0.3,
+        edge_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+        if num_layers < 1:
+            raise ValueError(
+                f"num_layers debe ser >= 1, recibido {num_layers}"
+            )
+
+        self.dropout = dropout
+        self.edge_dim = edge_dim
+
+        # Projection: input_dim -> hidden_dim (no residual: shapes mismatch).
+        self.input_proj = GATv2Conv(
+            input_dim,
+            hidden_dim,
+            heads=num_heads,
+            dropout=dropout,
+            concat=False,
+            edge_dim=edge_dim,
+        )
+        self.input_norm = nn.LayerNorm(hidden_dim)
+
+        # Residual layers.
+        self.layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        for _ in range(num_layers - 1):
+            self.layers.append(
+                GATv2Conv(
+                    hidden_dim,
+                    hidden_dim,
+                    heads=num_heads,
+                    dropout=dropout,
+                    concat=False,
+                    edge_dim=edge_dim,
+                )
+            )
+            self.norms.append(nn.LayerNorm(hidden_dim))
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if edge_attr is not None and edge_attr.dim() == 1:
+            edge_attr = edge_attr.unsqueeze(-1)
+
+        # Initial projection.
+        x = self.input_proj(x, edge_index, edge_attr=edge_attr)
+        x = self.input_norm(x)
+        x = F.gelu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # Pre-norm residual stack.
+        for conv, norm in zip(self.layers, self.norms):
+            h = norm(x)
+            h = conv(h, edge_index, edge_attr=edge_attr)
+            h = F.gelu(h)
+            h = F.dropout(h, p=self.dropout, training=self.training)
+            x = x + h
+
+        return x
+
+
+class Seq2SeqGNN(nn.Module):
+    """Spatio-Temporal Transformer with a horizon-query decoder.
+
+    The class name is preserved for config / checkpoint backward
+    compatibility; the architecture is the redesign described in this
+    module's docstring.
+
+    Args:
+        input_dim: Node feature dimensionality.
+        hidden_dim: Unified embedding dimension across spatial encoder,
+            temporal Transformer and decoder. Must be divisible by
+            ``num_heads``.
+        num_heads: Heads for ``GATv2Conv`` (spatial), ``TransformerEncoder``
+            (temporal) and ``MultiheadAttention`` (decoder).
+        num_spatial_layers: Number of GATv2 layers in the spatial encoder.
+        num_temporal_layers: Number of Transformer encoder layers.
+        num_horizons: Number of future horizons to predict.
+        dropout: Dropout probability used by encoders, decoder and head.
+        edge_dim: Last-dim size of ``edge_attr``. ``None`` disables edge
+            features (default for unit tests); the factory wires the
+            real per-edge dimension at construction time.
+
+    Raises:
+        ValueError: If ``hidden_dim`` is not divisible by ``num_heads``
+            (a hard requirement of ``MultiheadAttention`` /
+            ``TransformerEncoderLayer``).
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 128,
+        num_heads: int = 4,
+        num_spatial_layers: int = 3,
+        num_temporal_layers: int = 2,
         num_horizons: int = 5,
         dropout: float = 0.3,
         edge_dim: int | None = None,
     ) -> None:
         super().__init__()
+        if hidden_dim % num_heads != 0:
+            raise ValueError(
+                f"hidden_dim ({hidden_dim}) debe ser divisible por num_heads "
+                f"({num_heads}) — requerido por MultiheadAttention / "
+                f"TransformerEncoderLayer."
+            )
 
-        self.gnn_hidden = gnn_hidden
-        self.lstm_hidden = lstm_hidden
+        self.hidden_dim = hidden_dim
         self.num_horizons = num_horizons
 
-        # Shared spatial encoder (reused across all input timesteps)
-        self.encoder = GATEncoder(
+        # 1) Spatial encoder (per-snapshot GAT).
+        self.spatial_encoder = SpatialGATEncoder(
             input_dim=input_dim,
-            hidden_channels=gnn_hidden,
+            hidden_dim=hidden_dim,
             num_heads=num_heads,
-            num_layers=num_gnn_layers,
+            num_layers=num_spatial_layers,
             dropout=dropout,
             edge_dim=edge_dim,
         )
 
-        # Temporal encoder: reads sequence of spatial embeddings
-        self.encoder_lstm = nn.LSTM(
-            input_size=gnn_hidden,
-            hidden_size=lstm_hidden,
-            num_layers=1,
+        # 2) Temporal encoder (per-node Transformer over T timesteps).
+        self.positional_encoding = _SinusoidalPositionalEncoding(
+            d_model=hidden_dim
+        )
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 2,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,  # pre-norm: more stable on small batches
+        )
+        self.temporal_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_temporal_layers,
+        )
+
+        # 3) Horizon-query decoder.
+        # Learnable [num_horizons, hidden_dim] queries, BERT-style small init.
+        self.horizon_queries = nn.Parameter(
+            torch.randn(num_horizons, hidden_dim) * 0.02
+        )
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_heads,
+            dropout=dropout,
             batch_first=True,
         )
+        self.cross_attn_norm = nn.LayerNorm(hidden_dim)
 
-        # Temporal decoder: unrolls step-by-step using previous prediction
-        # Decoder input is a scalar delay value per node (shape [N, 1])
-        self.decoder_lstm = nn.LSTM(
-            input_size=1,
-            hidden_size=lstm_hidden,
-            num_layers=1,
-            batch_first=True,
+        # 2-layer MLP head: per attended query -> scalar prediction.
+        # Output dim is 1 today; W2 (multi-task heads) will widen this.
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
         )
-
-        # Learned start-of-sequence token for the first decoder step.
-        # Shape [1, 1, 1] -> broadcastable to [N, 1, 1].
-        self.start_token = nn.Parameter(torch.zeros(1, 1, 1))
-
-        # Separate output head per horizon
-        self.output_heads = nn.ModuleList(
-            [nn.Linear(lstm_hidden, 1) for _ in range(num_horizons)]
-        )
-
-        self.dropout = nn.Dropout(dropout)
-
-    def _encode(self, sequence: list[Data]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run shared GAT over each snapshot and compress via encoder LSTM.
-
-        Args:
-            sequence: List of PyG Data objects already on the target
-                device.
-
-        Returns:
-            Tuple of (h_n, c_n), each of shape [1, num_nodes, lstm_hidden].
-        """
-        embeddings = []
-        for graph in sequence:
-            emb = self.encoder(graph.x, graph.edge_index, graph.edge_attr)
-            embeddings.append(emb)
-
-        # Stack spatial embeddings into a temporal sequence
-        # List of [N, gnn_hidden] -> [N, T, gnn_hidden]
-        stacked = torch.stack(embeddings, dim=1)
-
-        _, (h_n, c_n) = self.encoder_lstm(stacked)
-        return h_n, c_n
-
-    def _decode(
-        self,
-        h_n: torch.Tensor,
-        c_n: torch.Tensor,
-        num_nodes: int,
-        targets: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Unroll the decoder LSTM for ``num_horizons`` steps.
-
-        Uses teacher forcing during training when targets are provided
-        and the model is in training mode. Otherwise uses autoregressive
-        decoding (previous prediction feeds next step).
-
-        Args:
-            h_n: Encoder final hidden state [1, num_nodes, lstm_hidden].
-            c_n: Encoder final cell state [1, num_nodes, lstm_hidden].
-            num_nodes: Number of graph nodes (batch size for the LSTM).
-            targets: Ground-truth targets [num_nodes, num_horizons] for
-                teacher forcing. If None or model in eval mode, decode
-                autoregressively.
-
-        Returns:
-            Predictions [num_nodes, num_horizons].
-        """
-        use_teacher_forcing = self.training and targets is not None
-
-        # Initial decoder input: learned start token broadcast across nodes
-        # Shape [num_nodes, 1, 1]: batch=N, seq_len=1, feature=1
-        decoder_input = self.start_token.expand(num_nodes, 1, 1)
-
-        hidden = (h_n, c_n)
-        predictions = []
-
-        for step in range(self.num_horizons):
-            # One-step decoder pass: out shape [N, 1, lstm_hidden]
-            out, hidden = self.decoder_lstm(decoder_input, hidden)
-
-            # Per-horizon output head
-            step_pred = self.output_heads[step](self.dropout(out.squeeze(1)))
-            # step_pred shape: [N, 1]
-            predictions.append(step_pred)
-
-            # Prepare input for next step
-            if step + 1 < self.num_horizons:
-                if use_teacher_forcing:
-                    # Feed ground-truth previous horizon
-                    next_input = targets[:, step].unsqueeze(-1).unsqueeze(-1)
-                else:
-                    # Feed own previous prediction
-                    next_input = step_pred.unsqueeze(-1)
-                decoder_input = next_input
-
-        # Concatenate per-step predictions: list of [N, 1] -> [N, num_horizons]
-        return torch.cat(predictions, dim=1)
 
     def forward(self, sequence: list[Data]) -> torch.Tensor:
         """Forward pass over a temporal sequence of graph snapshots.
 
-        During training (``self.training == True``), uses teacher forcing
-        with ground-truth targets from ``sequence[-1].y``. During eval,
-        decodes autoregressively.
-
         Args:
-            sequence: List of PyG Data objects on the target device.
-                The last graph must contain ``y`` with shape
-                [num_nodes, num_horizons] for teacher forcing.
+            sequence: List of PyG ``Data`` objects of length ``T``. Each
+                snapshot must expose ``x``, ``edge_index`` and (optionally)
+                ``edge_attr`` already on the target device. The model
+                ignores ``y`` entirely — there is no teacher forcing, so
+                the forward is identical in train and eval modes.
 
         Returns:
-            Predictions [num_nodes, num_horizons].
+            Predictions of shape ``[num_nodes, num_horizons]``.
         """
-        h_n, c_n = self._encode(sequence)
-        num_nodes = sequence[0].x.shape[0]
+        # 1) Per-snapshot spatial encoding.
+        embeddings = [
+            self.spatial_encoder(g.x, g.edge_index, g.edge_attr)
+            for g in sequence
+        ]
+        # Stack list of [N, d] -> [N, T, d].
+        spatial = torch.stack(embeddings, dim=1)
 
-        targets = sequence[-1].y if sequence[-1].y is not None else None
-        return self._decode(h_n, c_n, num_nodes, targets=targets)
+        # 2) Positional encoding + Transformer encoder over the T axis.
+        spatial = self.positional_encoding(spatial)
+        temporal = self.temporal_encoder(spatial)  # [N, T, d]
+
+        # 3) Horizon-query cross-attention.
+        num_nodes = temporal.shape[0]
+        # Broadcast queries [H, d] -> [N, H, d].
+        queries = self.horizon_queries.unsqueeze(0).expand(num_nodes, -1, -1)
+        attended, _ = self.cross_attention(
+            query=queries,
+            key=temporal,
+            value=temporal,
+            need_weights=False,
+        )
+        # Residual on the queries + LayerNorm — lets the model fall back
+        # to the bare query when attention is uninformative.
+        attended = self.cross_attn_norm(attended + queries)
+
+        # 4) Per-horizon MLP head -> [N, H, 1] -> [N, H].
+        return self.head(attended).squeeze(-1)
