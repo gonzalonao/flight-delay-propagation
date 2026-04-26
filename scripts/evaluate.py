@@ -23,7 +23,7 @@ from src.data.graph_builder import (
     create_temporal_sequences,
     split_graphs_temporal,
 )
-from src.data.loader import load_flight_data
+from src.data.loader import load_multiple_years
 from src.data.preprocessing import preprocess_pipeline
 from src.evaluation.metrics import (
     evaluate_graph_model,
@@ -241,11 +241,17 @@ def main() -> None:
 
     # --- Carga de datos ---
     data_dir = get_data_dir("raw", config)
-    year = config["data"].get("years", [2018])[0]
+    years = config["data"].get("years", [2018])
     columns = config["data"].get("columns")
 
-    # Para evaluación NO se usa muestreo (evaluar sobre datos completos)
-    df = load_flight_data(data_dir, year, columns=columns, sample_frac=None)
+    # Para evaluación NO se usa muestreo (evaluar sobre datos completos).
+    # Carga TODOS los años; si falta alguno en disco, sigue con los que haya
+    # — pero advierte. Cargar sólo years[0] hace que val/test (cortes
+    # cronológicos en 2019) queden vacíos cuando years=[2018,2019].
+    df = load_multiple_years(
+        data_dir, years, columns=columns,
+        sample_frac=None, skip_missing=True,
+    )
 
     # --- Preprocesamiento ---
     top_n = config.get("graph", {}).get("top_n_airports", 30)

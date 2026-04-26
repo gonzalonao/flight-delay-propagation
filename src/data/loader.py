@@ -227,6 +227,7 @@ def load_multiple_years(
     columns: list[str] | None = None,
     sample_frac: float | None = None,
     random_seed: int = 42,
+    skip_missing: bool = False,
 ) -> pd.DataFrame:
     """Carga datos de múltiples años, procesando uno a la vez.
 
@@ -239,20 +240,49 @@ def load_multiple_years(
         columns: Columnas a leer.
         sample_frac: Fracción de muestreo por año.
         random_seed: Semilla aleatoria.
+        skip_missing: Si True, ignora con un warning los años cuyo archivo
+            no exista. Útil cuando el config declara ``[2018, 2019]`` pero
+            sólo uno está descargado en disco — preferimos seguir adelante
+            con lo que haya en vez de abortar el entrenamiento.
 
     Returns:
-        DataFrame concatenado de todos los años solicitados.
+        DataFrame concatenado de todos los años cargados con éxito.
+
+    Raises:
+        FileNotFoundError: Si ``skip_missing=False`` y falta algún año, o si
+            ``skip_missing=True`` pero ningún año está disponible.
     """
     dfs = []
+    loaded_years: list[int] = []
     for year in years:
-        df = load_flight_data(data_dir, year, columns=columns,
-                              sample_frac=sample_frac, random_seed=random_seed)
+        try:
+            df = load_flight_data(data_dir, year, columns=columns,
+                                  sample_frac=sample_frac,
+                                  random_seed=random_seed)
+        except FileNotFoundError as exc:
+            if not skip_missing:
+                raise
+            logger.warning(
+                "Año %d no encontrado en %s — se omite (skip_missing=True). "
+                "Detalle: %s", year, data_dir, exc,
+            )
+            continue
         dfs.append(df)
+        loaded_years.append(year)
         logger.info("Año %d cargado: %d filas", year, len(df))
+
+    if not dfs:
+        raise FileNotFoundError(
+            f"Ningún año de {years} encontrado en {data_dir}. "
+            "Verifica que los Parquet/CSV estén descargados."
+        )
 
     result = pd.concat(dfs, ignore_index=True)
     del dfs
     gc.collect()
 
-    logger.info("Total combinado: %d filas de %d años", len(result), len(years))
+    logger.info(
+        "Total combinado: %d filas de años %s (solicitados: %s)",
+        len(result), loaded_years, years,
+    )
     return result
