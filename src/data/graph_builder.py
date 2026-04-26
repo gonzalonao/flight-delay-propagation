@@ -1077,11 +1077,28 @@ def build_graph_dataset(
     cache_dir = graph_config.get("cache_dir")
     cache_path: Path | None = None
     if cache_dir:
-        cache_path = Path(cache_dir) / f"snapshots_{_snapshot_cache_key(df, airports, config)}.pt"
+        cache_key = _snapshot_cache_key(df, airports, config)
+        cache_path = Path(cache_dir) / f"snapshots_{cache_key}.pt"
         if cache_path.exists():
-            logger.info("Cargando snapshots desde caché: %s", cache_path)
+            size_mb = cache_path.stat().st_size / (1024 * 1024)
+            logger.info(
+                "Caché HIT: cargando snapshots desde %s (%.1f MB)",
+                cache_path, size_mb,
+            )
             payload = torch.load(cache_path, weights_only=False)
             return payload["graphs"], payload["airport_map"]
+        logger.info(
+            "Caché MISS: no existe %s. Generando snapshots y escribiendo "
+            "caché tras el build.",
+            cache_path,
+        )
+    else:
+        logger.warning(
+            "Caché de snapshots DESACTIVADO (graph.cache_dir no está en el "
+            "config). Cada ejecución regenerará snapshots desde cero. Para "
+            "activarlo añade `graph.cache_dir: data/processed/snapshots` "
+            "al YAML."
+        )
 
     airport_map = build_airport_mapping(airports)
 

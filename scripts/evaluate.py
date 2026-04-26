@@ -41,6 +41,7 @@ from src.models.multi_horizon_gat import MultiHorizonGAT
 from src.models.seq2seq_gnn import Seq2SeqGNN
 from src.models.spatiotemporal_gnn import SpatioTemporalGNN
 from src.utils.config import load_config
+from src.utils.device import select_device
 from src.utils.io import get_data_dir, load_checkpoint
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
@@ -257,7 +258,7 @@ def main() -> None:
     top_n = config.get("graph", {}).get("top_n_airports", 30)
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device(config)
     is_multi_horizon = model_name in MULTI_HORIZON_MODELS
 
     delay_threshold = config.get("evaluation", {}).get(
