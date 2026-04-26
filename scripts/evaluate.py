@@ -293,7 +293,9 @@ def main() -> None:
         )
         model = _build_model(config, input_dim, edge_dim=edge_dim)
 
-        checkpoint_info = load_checkpoint(args.checkpoint, model)
+        checkpoint_info = load_checkpoint(
+            args.checkpoint, model, expected_model_name=model_name,
+        )
         logger.info(
             "Checkpoint cargado: época %d, métricas=%s",
             checkpoint_info["epoch"], checkpoint_info["metrics"],
@@ -344,7 +346,9 @@ def main() -> None:
         input_dim = test_features.shape[1]
         model = _build_model(config, input_dim)
 
-        checkpoint_info = load_checkpoint(args.checkpoint, model)
+        checkpoint_info = load_checkpoint(
+            args.checkpoint, model, expected_model_name=model_name,
+        )
         logger.info(
             "Checkpoint cargado: época %d, métricas=%s",
             checkpoint_info["epoch"], checkpoint_info["metrics"],

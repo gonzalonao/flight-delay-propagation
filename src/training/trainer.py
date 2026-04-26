@@ -108,6 +108,7 @@ class Trainer:
         epochs: int = 100,
         patience: int = 15,
         checkpoint_path: str | None = None,
+        model_name: str | None = None,
     ) -> dict[str, list[float]]:
         """Ejecuta el ciclo completo de entrenamiento con early stopping.
 
@@ -117,12 +118,17 @@ class Trainer:
             epochs: Número máximo de épocas.
             patience: Épocas sin mejora antes de parar.
             checkpoint_path: Ruta para guardar el mejor modelo (opcional).
+            model_name: Nombre lógico del modelo, persistido en el checkpoint
+                para validación de arquitectura al cargar.
 
         Returns:
             Diccionario con historial de pérdidas {'train_loss', 'val_loss'}.
         """
         early_stopping = EarlyStopping(patience=patience)
-        checkpoint = ModelCheckpoint(checkpoint_path) if checkpoint_path else None
+        checkpoint = (
+            ModelCheckpoint(checkpoint_path, model_name=model_name)
+            if checkpoint_path else None
+        )
 
         history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
 
