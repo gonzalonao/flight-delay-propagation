@@ -32,11 +32,13 @@ from src.evaluation.metrics import (
     evaluate_multi_horizon_graph_model,
     evaluate_multi_horizon_sequence_model,
 )
-from src.models.basic_gcn import BasicGCN
-from src.models.dense_nn import DenseNN
-from src.models.multi_horizon_gat import MultiHorizonGAT
-from src.models.seq2seq_gnn import Seq2SeqGNN
-from src.models.spatiotemporal_gnn import SpatioTemporalGNN
+from src.evaluation.reporting import log_multi_horizon_results, log_test_results
+from src.models.factory import (
+    GRAPH_MODELS,
+    MULTI_HORIZON_MODELS,
+    SEQUENCE_MODELS,
+    build_model,
+)
 from src.training.graph_trainer import GraphTrainer, SequenceGraphTrainer
 from src.training.losses import WeightedHuberLoss, WeightedMSELoss
 from src.training.trainer import Trainer
@@ -47,28 +49,6 @@ from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
 
 logger = setup_logger(__name__)
-
-
-MODEL_REGISTRY = {
-    "dense_nn": DenseNN,
-    "basic_gcn": BasicGCN,
-    "multi_horizon_gat": MultiHorizonGAT,
-    "spatiotemporal_gnn": SpatioTemporalGNN,
-    "seq2seq_gnn": Seq2SeqGNN,
-}
-
-# Modelos que usan grafos PyG en vez de datos tabulares
-GRAPH_MODELS = {
-    "basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
-}
-
-# Modelos que producen targets multi-horizonte
-MULTI_HORIZON_MODELS = {
-    "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
-}
-
-# Modelos que procesan secuencias de grafos temporales
-SEQUENCE_MODELS = {"spatiotemporal_gnn", "seq2seq_gnn"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,83 +63,6 @@ def parse_args() -> argparse.Namespace:
         help="Ruta al archivo de configuración YAML",
     )
     return parser.parse_args()
-
-
-def build_model(
-    config: dict, input_dim: int, edge_dim: int | None = None,
-) -> torch.nn.Module:
-    """Instancia el modelo según la configuración.
-
-    Args:
-        config: Configuración completa.
-        input_dim: Número de features de entrada.
-        edge_dim: Dimensión del tensor edge_attr para GATv2Conv. Si
-            ``None`` (modelos tabulares o BasicGCN) se ignora.
-
-    Returns:
-        Modelo de PyTorch.
-    """
-    model_name = config["model"]["name"]
-    model_config = config["model"].get(model_name, {})
-
-    if model_name == "dense_nn":
-        return DenseNN(
-            input_dim=input_dim,
-            hidden_dims=model_config.get("hidden_dims", [256, 128, 64]),
-            dropout=model_config.get("dropout", 0.3),
-            activation=model_config.get("activation", "relu"),
-        )
-
-    if model_name == "basic_gcn":
-        return BasicGCN(
-            input_dim=input_dim,
-            hidden_channels=model_config.get("hidden_channels", 64),
-            num_layers=model_config.get("num_layers", 3),
-            dropout=model_config.get("dropout", 0.3),
-        )
-
-    if model_name == "multi_horizon_gat":
-        graph_config = config.get("graph", {})
-        horizons = graph_config.get("prediction_horizons", [1, 2, 3, 4, 5])
-        return MultiHorizonGAT(
-            input_dim=input_dim,
-            hidden_channels=model_config.get("hidden_channels", 64),
-            num_heads=model_config.get("num_heads", 4),
-            num_layers=model_config.get("num_layers", 3),
-            num_horizons=len(horizons),
-            dropout=model_config.get("dropout", 0.3),
-            edge_dim=edge_dim,
-        )
-
-    if model_name == "spatiotemporal_gnn":
-        graph_config = config.get("graph", {})
-        horizons = graph_config.get("prediction_horizons", [1, 2, 3, 4, 5])
-        return SpatioTemporalGNN(
-            input_dim=input_dim,
-            gnn_hidden=model_config.get("gnn_hidden", 64),
-            lstm_hidden=model_config.get("lstm_hidden", 128),
-            num_heads=model_config.get("num_heads", 4),
-            num_gnn_layers=model_config.get("num_gnn_layers", 2),
-            num_horizons=len(horizons),
-            dropout=model_config.get("dropout", 0.3),
-            edge_dim=edge_dim,
-        )
-
-    if model_name == "seq2seq_gnn":
-        graph_config = config.get("graph", {})
-        horizons = graph_config.get("prediction_horizons", [1, 2, 3, 4, 5])
-        return Seq2SeqGNN(
-            input_dim=input_dim,
-            gnn_hidden=model_config.get("gnn_hidden", 64),
-            lstm_hidden=model_config.get("lstm_hidden", 128),
-            num_heads=model_config.get("num_heads", 4),
-            num_gnn_layers=model_config.get("num_gnn_layers", 2),
-            num_horizons=len(horizons),
-            dropout=model_config.get("dropout", 0.3),
-            edge_dim=edge_dim,
-        )
-
-    raise ValueError(f"Modelo no reconocido: {model_name}")
 
 
 def _build_optimizer_and_scheduler(
@@ -251,77 +154,6 @@ def _build_criterion(config: dict) -> torch.nn.Module:
     return torch.nn.MSELoss()
 
 
-def _log_test_results(metrics: dict[str, float], model_name: str) -> None:
-    """Muestra los resultados de test en formato unificado.
-
-    Agrupa las métricas en regresión y clasificación derivada para
-    facilitar la comparación entre modelos.
-
-    Args:
-        metrics: Diccionario con métricas unificadas.
-        model_name: Nombre del modelo evaluado.
-    """
-    logger.info("=" * 50)
-    logger.info("RESULTADOS EN TEST — %s", model_name)
-    logger.info("-" * 50)
-    logger.info("  Regresión:")
-    logger.info("    MAE:  %.4f min", metrics["mae"])
-    logger.info("    RMSE: %.4f min", metrics["rmse"])
-    logger.info("    MAPE: %.4f %%", metrics["mape"])
-    logger.info("    R²:   %.4f", metrics["r2"])
-    logger.info("  Clasificación (umbral=15 min):")
-    logger.info("    ACCURACY:  %.4f", metrics["accuracy"])
-    logger.info("    PRECISION: %.4f", metrics["precision"])
-    logger.info("    RECALL:    %.4f", metrics["recall"])
-    logger.info("    F1:        %.4f", metrics["f1"])
-    logger.info("=" * 50)
-
-
-def _log_multi_horizon_results(
-    metrics: dict[str, dict[str, float]],
-    model_name: str,
-    horizons: list[int],
-) -> None:
-    """Muestra los resultados multi-horizonte en formato unificado.
-
-    Args:
-        metrics: Diccionario con métricas por horizonte y promedio.
-        model_name: Nombre del modelo evaluado.
-        horizons: Lista de horizontes evaluados.
-    """
-    logger.info("=" * 60)
-    logger.info("RESULTADOS EN TEST — %s (multi-horizonte)", model_name)
-    logger.info("=" * 60)
-
-    for h in horizons:
-        key = f"horizon_{h}h"
-        m = metrics[key]
-        logger.info("  Horizonte +%dh:", h)
-        logger.info(
-            "    MAE: %.4f | RMSE: %.4f | MAPE: %.4f%% | R²: %.4f",
-            m["mae"], m["rmse"], m["mape"], m["r2"],
-        )
-        logger.info(
-            "    Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f",
-            m["accuracy"], m["precision"], m["recall"], m["f1"],
-        )
-
-    avg = metrics["average"]
-    logger.info("-" * 60)
-    logger.info("  PROMEDIO (todos los horizontes):")
-    logger.info("    Regresión:")
-    logger.info("      MAE:  %.4f min", avg["mae"])
-    logger.info("      RMSE: %.4f min", avg["rmse"])
-    logger.info("      MAPE: %.4f %%", avg["mape"])
-    logger.info("      R²:   %.4f", avg["r2"])
-    logger.info("    Clasificación (umbral=15 min):")
-    logger.info("      ACCURACY:  %.4f", avg["accuracy"])
-    logger.info("      PRECISION: %.4f", avg["precision"])
-    logger.info("      RECALL:    %.4f", avg["recall"])
-    logger.info("      F1:        %.4f", avg["f1"])
-    logger.info("=" * 60)
-
-
 def _train_tabular(config: dict, df, airports: list[str]) -> None:
     """Pipeline de entrenamiento para modelos tabulares (DenseNN, LSTM)."""
     target_col = config.get("features", {}).get("target", "ArrDelay")
@@ -389,7 +221,7 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
             "delay_threshold_minutes", 15
         )
         metrics = evaluate_model(model, test_loader, device, delay_threshold)
-        _log_test_results(metrics, config["model"]["name"])
+        log_test_results(metrics, config["model"]["name"], logger)
 
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 
@@ -498,12 +330,12 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
             metrics = evaluate_multi_horizon_graph_model(
                 model, test_graphs, device, horizons, delay_threshold
             )
-            _log_multi_horizon_results(metrics, model_name, horizons)
+            log_multi_horizon_results(metrics, model_name, horizons, logger)
         else:
             metrics = evaluate_graph_model(
                 model, test_graphs, device, delay_threshold
             )
-            _log_test_results(metrics, model_name)
+            log_test_results(metrics, model_name, logger)
 
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 
@@ -617,7 +449,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         metrics = evaluate_multi_horizon_sequence_model(
             model, test_sequences, device, horizons, delay_threshold
         )
-        _log_multi_horizon_results(metrics, model_name, horizons)
+        log_multi_horizon_results(metrics, model_name, horizons, logger)
 
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 

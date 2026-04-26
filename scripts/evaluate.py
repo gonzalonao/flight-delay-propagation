@@ -35,94 +35,20 @@ from src.evaluation.visualization import (
     plot_error_distribution,
     plot_predictions_vs_actual,
 )
-from src.models.basic_gcn import BasicGCN
-from src.models.dense_nn import DenseNN
-from src.models.multi_horizon_gat import MultiHorizonGAT
-from src.models.seq2seq_gnn import Seq2SeqGNN
-from src.models.spatiotemporal_gnn import SpatioTemporalGNN
+from src.evaluation.reporting import log_multi_horizon_results, log_test_results
+from src.models.factory import (
+    GRAPH_MODELS,
+    MULTI_HORIZON_MODELS,
+    SEQUENCE_MODELS,
+    build_model,
+)
 from src.utils.config import load_config
 from src.utils.device import select_device
 from src.utils.io import get_data_dir, load_checkpoint
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
 
-GRAPH_MODELS = {
-    "basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
-}
-MULTI_HORIZON_MODELS = {
-    "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
-}
-SEQUENCE_MODELS = {"spatiotemporal_gnn", "seq2seq_gnn"}
-
 logger = setup_logger(__name__)
-
-
-def _log_test_results(metrics: dict[str, float], model_name: str) -> None:
-    """Muestra los resultados de test en formato unificado.
-
-    Args:
-        metrics: Diccionario con métricas unificadas.
-        model_name: Nombre del modelo evaluado.
-    """
-    logger.info("=" * 50)
-    logger.info("RESULTADOS EN TEST — %s", model_name)
-    logger.info("-" * 50)
-    logger.info("  Regresión:")
-    logger.info("    MAE:  %.4f min", metrics["mae"])
-    logger.info("    RMSE: %.4f min", metrics["rmse"])
-    logger.info("    MAPE: %.4f %%", metrics["mape"])
-    logger.info("    R²:   %.4f", metrics["r2"])
-    logger.info("  Clasificación (umbral=15 min):")
-    logger.info("    ACCURACY:  %.4f", metrics["accuracy"])
-    logger.info("    PRECISION: %.4f", metrics["precision"])
-    logger.info("    RECALL:    %.4f", metrics["recall"])
-    logger.info("    F1:        %.4f", metrics["f1"])
-    logger.info("=" * 50)
-
-
-def _log_multi_horizon_results(
-    metrics: dict[str, dict[str, float]],
-    model_name: str,
-    horizons: list[int],
-) -> None:
-    """Muestra los resultados multi-horizonte en formato unificado.
-
-    Args:
-        metrics: Diccionario con métricas por horizonte y promedio.
-        model_name: Nombre del modelo evaluado.
-        horizons: Lista de horizontes evaluados.
-    """
-    logger.info("=" * 60)
-    logger.info("RESULTADOS EN TEST — %s (multi-horizonte)", model_name)
-    logger.info("=" * 60)
-
-    for h in horizons:
-        key = f"horizon_{h}h"
-        m = metrics[key]
-        logger.info("  Horizonte +%dh:", h)
-        logger.info(
-            "    MAE: %.4f | RMSE: %.4f | MAPE: %.4f%% | R²: %.4f",
-            m["mae"], m["rmse"], m["mape"], m["r2"],
-        )
-        logger.info(
-            "    Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f",
-            m["accuracy"], m["precision"], m["recall"], m["f1"],
-        )
-
-    avg = metrics["average"]
-    logger.info("-" * 60)
-    logger.info("  PROMEDIO (todos los horizontes):")
-    logger.info("    Regresión:")
-    logger.info("      MAE:  %.4f min", avg["mae"])
-    logger.info("      RMSE: %.4f min", avg["rmse"])
-    logger.info("      MAPE: %.4f %%", avg["mape"])
-    logger.info("      R²:   %.4f", avg["r2"])
-    logger.info("    Clasificación (umbral=15 min):")
-    logger.info("      ACCURACY:  %.4f", avg["accuracy"])
-    logger.info("      PRECISION: %.4f", avg["precision"])
-    logger.info("      RECALL:    %.4f", avg["recall"])
-    logger.info("      F1:        %.4f", avg["f1"])
-    logger.info("=" * 60)
 
 
 def parse_args() -> argparse.Namespace:
@@ -146,85 +72,6 @@ def parse_args() -> argparse.Namespace:
         help="Generar gráficos de evaluación",
     )
     return parser.parse_args()
-
-
-def _build_model(
-    config: dict, input_dim: int, edge_dim: int | None = None,
-) -> torch.nn.Module:
-    """Instancia el modelo según la configuración completa.
-
-    Args:
-        config: Configuración completa del proyecto.
-        input_dim: Dimensión de entrada.
-        edge_dim: Dimensión del tensor edge_attr (5 con la pipeline
-            actual; None para tabulares o si edge_attr es escalar).
-
-    Returns:
-        Modelo de PyTorch.
-    """
-    model_name = config["model"]["name"]
-    model_config = config["model"].get(model_name, {})
-
-    if model_name == "dense_nn":
-        return DenseNN(
-            input_dim=input_dim,
-            hidden_dims=model_config.get("hidden_dims", [256, 128, 64]),
-            dropout=model_config.get("dropout", 0.3),
-        )
-
-    if model_name == "basic_gcn":
-        return BasicGCN(
-            input_dim=input_dim,
-            hidden_channels=model_config.get("hidden_channels", 64),
-            num_layers=model_config.get("num_layers", 3),
-            dropout=model_config.get("dropout", 0.3),
-        )
-
-    if model_name == "multi_horizon_gat":
-        horizons = config.get("graph", {}).get(
-            "prediction_horizons", [1, 2, 3, 4, 5]
-        )
-        return MultiHorizonGAT(
-            input_dim=input_dim,
-            hidden_channels=model_config.get("hidden_channels", 64),
-            num_heads=model_config.get("num_heads", 4),
-            num_layers=model_config.get("num_layers", 3),
-            num_horizons=len(horizons),
-            dropout=model_config.get("dropout", 0.3),
-            edge_dim=edge_dim,
-        )
-
-    if model_name == "spatiotemporal_gnn":
-        horizons = config.get("graph", {}).get(
-            "prediction_horizons", [1, 2, 3, 4, 5]
-        )
-        return SpatioTemporalGNN(
-            input_dim=input_dim,
-            gnn_hidden=model_config.get("gnn_hidden", 64),
-            lstm_hidden=model_config.get("lstm_hidden", 128),
-            num_heads=model_config.get("num_heads", 4),
-            num_gnn_layers=model_config.get("num_gnn_layers", 2),
-            num_horizons=len(horizons),
-            dropout=model_config.get("dropout", 0.3),
-            edge_dim=edge_dim,
-        )
-
-    if model_name == "seq2seq_gnn":
-        horizons = config.get("graph", {}).get(
-            "prediction_horizons", [1, 2, 3, 4, 5]
-        )
-        return Seq2SeqGNN(
-            input_dim=input_dim,
-            gnn_hidden=model_config.get("gnn_hidden", 64),
-            lstm_hidden=model_config.get("lstm_hidden", 128),
-            num_heads=model_config.get("num_heads", 4),
-            num_gnn_layers=model_config.get("num_gnn_layers", 2),
-            num_horizons=len(horizons),
-            dropout=model_config.get("dropout", 0.3),
-            edge_dim=edge_dim,
-        )
-
-    raise ValueError(f"Modelo no reconocido: {model_name}")
 
 
 def main() -> None:
@@ -292,7 +139,7 @@ def main() -> None:
             sample_ea.shape[1]
             if sample_ea is not None and sample_ea.dim() == 2 else None
         )
-        model = _build_model(config, input_dim, edge_dim=edge_dim)
+        model = build_model(config, input_dim, edge_dim=edge_dim)
 
         checkpoint_info = load_checkpoint(
             args.checkpoint, model, expected_model_name=model_name,
@@ -321,7 +168,7 @@ def main() -> None:
             metrics = evaluate_multi_horizon_sequence_model(
                 model, test_sequences, device, horizons, delay_threshold
             )
-            _log_multi_horizon_results(metrics, model_name, horizons)
+            log_multi_horizon_results(metrics, model_name, horizons, logger)
         elif is_multi_horizon:
             horizons = config.get("graph", {}).get(
                 "prediction_horizons", [1, 2, 3, 4, 5]
@@ -329,12 +176,12 @@ def main() -> None:
             metrics = evaluate_multi_horizon_graph_model(
                 model, test_graphs, device, horizons, delay_threshold
             )
-            _log_multi_horizon_results(metrics, model_name, horizons)
+            log_multi_horizon_results(metrics, model_name, horizons, logger)
         else:
             metrics = evaluate_graph_model(
                 model, test_graphs, device, delay_threshold
             )
-            _log_test_results(metrics, model_name)
+            log_test_results(metrics, model_name, logger)
 
     else:
         # --- Pipeline tabular ---
@@ -345,7 +192,7 @@ def main() -> None:
         test_features, test_targets = splits["test"]
 
         input_dim = test_features.shape[1]
-        model = _build_model(config, input_dim)
+        model = build_model(config, input_dim)
 
         checkpoint_info = load_checkpoint(
             args.checkpoint, model, expected_model_name=model_name,
@@ -364,7 +211,7 @@ def main() -> None:
         )
 
         metrics = evaluate_model(model, test_loader, device, delay_threshold)
-        _log_test_results(metrics, model_name)
+        log_test_results(metrics, model_name, logger)
 
     # --- Gráficos opcionales (solo modelos tabulares por ahora) ---
     if args.plots and model_name not in GRAPH_MODELS:
