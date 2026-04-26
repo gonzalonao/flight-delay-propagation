@@ -117,12 +117,26 @@ def build_model(
         )
 
     if model_name == "seq2seq_gnn":
+        # Backward compat: el modelo se redefinió en W3 (Spatio-Temporal
+        # Transformer + horizon-query decoder). Las claves nuevas son
+        # ``hidden_dim`` / ``num_spatial_layers`` / ``num_temporal_layers``.
+        # Si el config aún trae las antiguas (``gnn_hidden`` /
+        # ``num_gnn_layers``) las usamos como fallback. ``lstm_hidden`` no
+        # tiene equivalente — el nuevo modelo no usa LSTM — y se ignora
+        # silenciosamente para no romper configs heredados.
+        hidden_dim = model_config.get(
+            "hidden_dim", model_config.get("gnn_hidden", 128),
+        )
+        num_spatial_layers = model_config.get(
+            "num_spatial_layers", model_config.get("num_gnn_layers", 3),
+        )
+        num_temporal_layers = model_config.get("num_temporal_layers", 2)
         return Seq2SeqGNN(
             input_dim=input_dim,
-            gnn_hidden=model_config.get("gnn_hidden", 64),
-            lstm_hidden=model_config.get("lstm_hidden", 128),
+            hidden_dim=hidden_dim,
             num_heads=model_config.get("num_heads", 4),
-            num_gnn_layers=model_config.get("num_gnn_layers", 2),
+            num_spatial_layers=num_spatial_layers,
+            num_temporal_layers=num_temporal_layers,
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
             edge_dim=edge_dim,

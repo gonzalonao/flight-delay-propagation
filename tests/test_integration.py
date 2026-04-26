@@ -75,10 +75,12 @@ def _make_config(model_name: str) -> dict:
                 "dropout": 0.1,
             },
             "seq2seq_gnn": {
-                "gnn_hidden": 16,
-                "lstm_hidden": 16,
+                # Rediseñado en W3: claves nuevas (hidden_dim,
+                # num_spatial_layers, num_temporal_layers).
+                "hidden_dim": 16,
                 "num_heads": 2,
-                "num_gnn_layers": 1,
+                "num_spatial_layers": 1,
+                "num_temporal_layers": 1,
                 "dropout": 0.1,
             },
         },
