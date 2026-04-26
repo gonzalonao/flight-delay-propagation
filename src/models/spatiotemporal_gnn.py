@@ -54,24 +54,26 @@ class GATEncoder(nn.Module):
         self.convs = nn.ModuleList()
         self.bns = nn.ModuleList()
 
-        # First layer: input_dim -> hidden_channels * num_heads
-        self.convs.append(
-            GATv2Conv(
-                input_dim,
-                hidden_channels,
-                heads=num_heads,
-                dropout=dropout,
-                concat=True,
-                edge_dim=edge_dim,
-            )
-        )
-        self.bns.append(nn.BatchNorm1d(hidden_channels * num_heads))
-
-        # Intermediate layers
-        for _ in range(num_layers - 2):
+        if num_layers == 1:
+            # Single-layer encoder: average heads on the only layer so the
+            # output dim is ``hidden_channels`` (consistent with the
+            # multi-layer branch and what the downstream LSTM expects).
             self.convs.append(
                 GATv2Conv(
-                    hidden_channels * num_heads,
+                    input_dim,
+                    hidden_channels,
+                    heads=num_heads,
+                    dropout=dropout,
+                    concat=False,
+                    edge_dim=edge_dim,
+                )
+            )
+            self.bns.append(nn.BatchNorm1d(hidden_channels))
+        else:
+            # First layer: input_dim -> hidden_channels * num_heads
+            self.convs.append(
+                GATv2Conv(
+                    input_dim,
                     hidden_channels,
                     heads=num_heads,
                     dropout=dropout,
@@ -81,8 +83,22 @@ class GATEncoder(nn.Module):
             )
             self.bns.append(nn.BatchNorm1d(hidden_channels * num_heads))
 
-        # Last layer: average heads (concat=False)
-        if num_layers > 1:
+            # Intermediate layers
+            for _ in range(num_layers - 2):
+                self.convs.append(
+                    GATv2Conv(
+                        hidden_channels * num_heads,
+                        hidden_channels,
+                        heads=num_heads,
+                        dropout=dropout,
+                        concat=True,
+                        edge_dim=edge_dim,
+                    )
+                )
+                self.bns.append(nn.BatchNorm1d(hidden_channels * num_heads))
+
+            # Last layer: average heads (concat=False) so output dim
+            # collapses back to ``hidden_channels``.
             self.convs.append(
                 GATv2Conv(
                     hidden_channels * num_heads,
