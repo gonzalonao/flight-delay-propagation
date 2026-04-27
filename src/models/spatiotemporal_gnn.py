@@ -160,6 +160,11 @@ class SpatioTemporalGNN(nn.Module):
         edge_dim: Edge attribute dimension forwarded to ``GATEncoder``.
             ``None`` disables edge features (default for tests); the
             production factory wires ``edge_dim=5``.
+        output_channels: Channels per horizon. ``1`` (default) keeps the
+            historical ``[N, H]`` output (single-task ArrDelay regression).
+            ``3`` activates the W2 multi-task head: output ``[N, H, 3]``
+            with channels ``(arr_delay, dep_delay_aux, pct_15_logit)``,
+            consumed by ``MultiTaskLoss`` and the BCE-derived metrics.
     """
 
     def __init__(
@@ -172,12 +177,19 @@ class SpatioTemporalGNN(nn.Module):
         num_horizons: int = 5,
         dropout: float = 0.3,
         edge_dim: int | None = None,
+        output_channels: int = 1,
     ) -> None:
         super().__init__()
+
+        if output_channels < 1:
+            raise ValueError(
+                f"output_channels must be >= 1, got {output_channels}"
+            )
 
         self.gnn_hidden = gnn_hidden
         self.lstm_hidden = lstm_hidden
         self.num_horizons = num_horizons
+        self.output_channels = output_channels
 
         self.encoder = GATEncoder(
             input_dim=input_dim,
@@ -195,11 +207,13 @@ class SpatioTemporalGNN(nn.Module):
             batch_first=True,
         )
 
+        # Single linear projects to `num_horizons * output_channels` and
+        # the forward reshapes to the multi-task tensor when needed.
         self.head = nn.Sequential(
             nn.Linear(lstm_hidden, lstm_hidden),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(lstm_hidden, num_horizons),
+            nn.Linear(lstm_hidden, num_horizons * output_channels),
         )
 
     def forward(self, sequence: list[Data]) -> torch.Tensor:
@@ -211,7 +225,9 @@ class SpatioTemporalGNN(nn.Module):
                 edge_attr already on the correct device.
 
         Returns:
-            Predictions [num_nodes, num_horizons].
+            ``[num_nodes, num_horizons]`` if ``output_channels == 1``
+            (legacy single-task), else ``[num_nodes, num_horizons,
+            output_channels]`` (W2 multi-task).
         """
         embeddings = []
         for graph in sequence:
@@ -224,5 +240,7 @@ class SpatioTemporalGNN(nn.Module):
         # LSTM: [N, T, gnn_hidden] -> h_n [1, N, lstm_hidden]
         _, (h_n, _) = self.lstm(stacked)
 
-        # Final hidden state -> predictions
-        return self.head(h_n.squeeze(0))
+        out = self.head(h_n.squeeze(0))
+        if self.output_channels == 1:
+            return out  # [N, H] — legacy
+        return out.view(out.size(0), self.num_horizons, self.output_channels)

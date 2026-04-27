@@ -210,11 +210,18 @@ class Seq2SeqGNN(nn.Module):
         edge_dim: Last-dim size of ``edge_attr``. ``None`` disables edge
             features (default for unit tests); the factory wires the
             real per-edge dimension at construction time.
+        output_channels: Channels per horizon. ``1`` (default) keeps the
+            historical ``[N, H]`` output (single-task ArrDelay regression).
+            ``3`` activates the W2 multi-task head: output ``[N, H, 3]``
+            with channels ``(arr_delay, dep_delay_aux, pct_15_logit)``.
+            The MLP head's final Linear widens from ``hidden_dim -> 1`` to
+            ``hidden_dim -> output_channels`` — every channel shares the
+            attended representation per (node, horizon) query.
 
     Raises:
         ValueError: If ``hidden_dim`` is not divisible by ``num_heads``
             (a hard requirement of ``MultiheadAttention`` /
-            ``TransformerEncoderLayer``).
+            ``TransformerEncoderLayer``) or if ``output_channels < 1``.
     """
 
     def __init__(
@@ -227,6 +234,7 @@ class Seq2SeqGNN(nn.Module):
         num_horizons: int = 5,
         dropout: float = 0.3,
         edge_dim: int | None = None,
+        output_channels: int = 1,
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads != 0:
@@ -235,9 +243,14 @@ class Seq2SeqGNN(nn.Module):
                 f"({num_heads}) — requerido por MultiheadAttention / "
                 f"TransformerEncoderLayer."
             )
+        if output_channels < 1:
+            raise ValueError(
+                f"output_channels debe ser >= 1, recibido {output_channels}"
+            )
 
         self.hidden_dim = hidden_dim
         self.num_horizons = num_horizons
+        self.output_channels = output_channels
 
         # 1) Spatial encoder (per-snapshot GAT).
         self.spatial_encoder = SpatialGATEncoder(
@@ -279,13 +292,18 @@ class Seq2SeqGNN(nn.Module):
         )
         self.cross_attn_norm = nn.LayerNorm(hidden_dim)
 
-        # 2-layer MLP head: per attended query -> scalar prediction.
-        # Output dim is 1 today; W2 (multi-task heads) will widen this.
+        # 2-layer MLP head applied to each attended horizon query. The
+        # final Linear emits ``output_channels`` per query — 1 in the
+        # historical single-task setup; 3 in the W2 multi-task setup
+        # (arr_delay regression + dep_delay aux regression + pct_15
+        # classification logit). The two regression channels are read in
+        # minutes; the classification channel is a logit (sigmoid lives
+        # in BCEWithLogitsLoss / metric extraction).
         self.head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(hidden_dim, output_channels),
         )
 
     def forward(self, sequence: list[Data]) -> torch.Tensor:
@@ -299,7 +317,9 @@ class Seq2SeqGNN(nn.Module):
                 the forward is identical in train and eval modes.
 
         Returns:
-            Predictions of shape ``[num_nodes, num_horizons]``.
+            ``[num_nodes, num_horizons]`` if ``output_channels == 1``
+            (legacy single-task), else ``[num_nodes, num_horizons,
+            output_channels]`` (W2 multi-task).
         """
         # 1) Per-snapshot spatial encoding.
         embeddings = [
@@ -327,5 +347,11 @@ class Seq2SeqGNN(nn.Module):
         # to the bare query when attention is uninformative.
         attended = self.cross_attn_norm(attended + queries)
 
-        # 4) Per-horizon MLP head -> [N, H, 1] -> [N, H].
-        return self.head(attended).squeeze(-1)
+        # 4) Per-horizon MLP head: applied per (node, horizon) query.
+        #    output_channels == 1 → [N, H, 1] squeezed to [N, H] (legacy).
+        #    output_channels  > 1 → [N, H, output_channels] kept as-is
+        #    (multi-task: arr_delay, dep_delay_aux, pct_15_logit).
+        out = self.head(attended)  # [N, H, output_channels]
+        if self.output_channels == 1:
+            return out.squeeze(-1)
+        return out

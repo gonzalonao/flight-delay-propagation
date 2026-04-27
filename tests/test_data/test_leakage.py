@@ -169,11 +169,14 @@ def test_targets_do_use_future_window(synthetic_config):
     for g in graphs:
         current_end = pd.Timestamp(g.timestamp)
         if current_end == pd.Timestamp("2018-01-01 18:00"):
-            y = g.y  # [N, num_horizons]
-            # h_idx=1 corresponde a horizons[1]=2.
-            assert y[bbb, 1].item() > 1e5, (
-                f"Target h=2 de BBB no captura el vuelo sentinel: y={y[bbb]}"
+            y = g.y  # W2: [N, num_horizons, 3]
+            # h_idx=1 corresponde a horizons[1]=2; canal 0 = arr_delay
+            # (canal en el que vive el sentinel ArrDelay=1e6).
+            assert y[bbb, 1, 0].item() > 1e5, (
+                f"Target h=2 (arr) de BBB no captura el sentinel: y={y[bbb, 1]}"
             )
+            # Canal 2 (pct_arr_delayed_15) ∈ [0, 1] — no se contamina.
+            assert 0.0 <= y[bbb, 1, 2].item() <= 1.0
             found = True
             break
     assert found, "No se generó snapshot con current_end=18:00"

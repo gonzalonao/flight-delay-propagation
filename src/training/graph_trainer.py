@@ -14,10 +14,30 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import Data
 
+from src.data.graph_builder import TARGET_CHANNEL_ARR_DELAY
 from src.training.callbacks import EarlyStopping, ModelCheckpoint
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+def _align_for_val(
+    predictions: torch.Tensor, targets: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Alinea pred/target al canal de ArrDelay para validación.
+
+    El val_criterion estándar (MSE) compara minutos de ArrDelay para que
+    el ``val_loss`` sea comparable entre modelos single-task y multi-task
+    (W2). Cuando el modelo o el target llegan en formato multi-canal
+    ``[..., 3]`` extraemos el canal 0 (ArrDelay). El otro canal de
+    regresión (DepDelay) y el canal BCE se evalúan vía métricas
+    dedicadas (``compute_classification_metrics_bce`` etc.), no aquí.
+    """
+    if predictions.dim() == 3:
+        predictions = predictions[..., TARGET_CHANNEL_ARR_DELAY]
+    if targets.dim() == 3:
+        targets = targets[..., TARGET_CHANNEL_ARR_DELAY]
+    return predictions, targets
 
 
 class GraphTrainer:
@@ -123,13 +143,16 @@ class GraphTrainer:
 
         Usa val_criterion (MSELoss estándar por defecto) para que las
         métricas de validación sean comparables independientemente de
-        la función de pérdida usada en entrenamiento.
+        la función de pérdida usada en entrenamiento. Cuando el modelo
+        o el target son multi-canal (W2), el val_loss se calcula sólo
+        sobre el canal de ArrDelay para mantener la métrica comparable
+        con runs single-task históricos.
 
         Args:
             graphs: Lista de grafos temporales de validación.
 
         Returns:
-            Pérdida promedio de validación (MSE estándar).
+            Pérdida promedio de validación (MSE estándar sobre ArrDelay).
         """
         self.model.eval()
         total_loss = 0.0
@@ -141,7 +164,8 @@ class GraphTrainer:
             if mask.sum() == 0:
                 continue
 
-            loss = self.val_criterion(logits[mask], targets[mask])
+            pred_v, target_v = _align_for_val(logits[mask], targets[mask])
+            loss = self.val_criterion(pred_v, target_v)
             total_loss += loss.item()
             n_graphs += 1
 
@@ -326,12 +350,15 @@ class SequenceGraphTrainer:
 
         Usa val_criterion (MSELoss estándar por defecto) para métricas
         comparables independientemente de la pérdida de entrenamiento.
+        Cuando el modelo o el target son multi-canal (W2), el val_loss
+        se calcula sólo sobre el canal de ArrDelay (channel 0) para
+        comparabilidad histórica.
 
         Args:
             sequences: Lista de secuencias temporales de validación.
 
         Returns:
-            Pérdida promedio de validación.
+            Pérdida promedio de validación (MSE estándar sobre ArrDelay).
         """
         self.model.eval()
         total_loss = 0.0
@@ -343,7 +370,8 @@ class SequenceGraphTrainer:
             if mask.sum() == 0:
                 continue
 
-            loss = self.val_criterion(predictions[mask], targets[mask])
+            pred_v, target_v = _align_for_val(predictions[mask], targets[mask])
+            loss = self.val_criterion(pred_v, target_v)
             total_loss += loss.item()
             n_seqs += 1
 

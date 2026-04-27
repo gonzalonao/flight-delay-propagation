@@ -184,6 +184,32 @@ class TestSeq2SeqGNN:
                 "El nuevo Seq2SeqGNN no debe contener LSTMs"
             )
 
+    def test_output_channels_widens_to_multitask(self, graph_sequence):
+        """Con output_channels=3 (W2), output es [N, H, 3] en eval y train."""
+        model = _make_model()
+        # Construir con la misma firma pero output_channels=3.
+        model = Seq2SeqGNN(
+            input_dim=6, hidden_dim=16, num_heads=2,
+            num_spatial_layers=2, num_temporal_layers=1,
+            num_horizons=5, dropout=0.3, edge_dim=1,
+            output_channels=3,
+        )
+        model.eval()
+        out_eval = model(graph_sequence)
+        assert out_eval.shape == (4, 5, 3)
+        model.train()
+        out_train = model(graph_sequence)
+        assert out_train.shape == (4, 5, 3)
+
+    def test_invalid_output_channels_raises(self):
+        """output_channels < 1 debe lanzar ValueError al construir."""
+        with pytest.raises(ValueError, match=">= 1"):
+            Seq2SeqGNN(
+                input_dim=6, hidden_dim=16, num_heads=2,
+                num_spatial_layers=1, num_temporal_layers=1,
+                num_horizons=3, output_channels=0,
+            )
+
     def test_hidden_dim_must_be_divisible_by_num_heads(self):
         """Constructor falla rápido si hidden_dim % num_heads != 0."""
         with pytest.raises(ValueError, match="divisible por num_heads"):

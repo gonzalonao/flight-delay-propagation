@@ -4,12 +4,27 @@ Todos los modelos (tabulares y GNN) producen predicciones de regresión
 (retraso en minutos) y se evalúan con el mismo conjunto de métricas:
 - Regresión: MAE, RMSE, MAPE, R²
 - Clasificación derivada: Accuracy, Precision, Recall, F1
-  (aplicando un umbral sobre la predicción continua)
+  (aplicando un umbral sobre la predicción continua de ArrDelay)
+
+A partir de W2 los modelos multi-tarea (``output_channels=3``) producen
+también un canal de **logits** para ``pct_arr_delayed_15``. Cuando ese
+canal está presente, se computan métricas de clasificación adicionales
+con el prefijo ``bce_`` (``bce_accuracy``, ``bce_precision``, etc.) que
+salen directamente del head BCE (sigmoid + threshold 0.5). Las dos
+familias de métricas coexisten para permitir comparación apples-to-
+apples entre la decisión derivada del regresor y la del clasificador
+dedicado.
 """
 
 import numpy as np
 import torch
 from torch_geometric.data import Data
+
+from src.data.graph_builder import (
+    NUM_TARGET_CHANNELS,
+    TARGET_CHANNEL_ARR_DELAY,
+    TARGET_CHANNEL_PCT_DELAYED,
+)
 
 
 def compute_mae(predictions: np.ndarray, targets: np.ndarray) -> float:
@@ -135,10 +150,61 @@ def compute_classification_metrics(
     }
 
 
+def compute_bce_classification_metrics(
+    pct_logits: np.ndarray,
+    pct_targets: np.ndarray,
+    bce_threshold: float = 0.5,
+    target_threshold: float = 0.5,
+) -> dict[str, float]:
+    """Métricas de clasificación binaria derivadas del head BCE de W2.
+
+    El modelo emite ``logits`` para ``pct_arr_delayed_15`` (logit ∈ ℝ);
+    aplicamos sigmoid y comparamos con ``bce_threshold`` (0.5 por
+    defecto) para obtener la etiqueta predicha. El target es la
+    fracción real de vuelos delayed en la ventana ∈ [0, 1]; se binariza
+    contra ``target_threshold`` (por defecto 0.5 — "más de la mitad
+    delayed" cuenta como ventana retrasada). Bajar ``bce_threshold``
+    es la palanca natural para subir recall a cambio de precision.
+
+    Args:
+        pct_logits: Logits ``[N]`` del canal pct (pre-sigmoid).
+        pct_targets: Targets ``[N]`` ∈ [0, 1] del mismo canal.
+        bce_threshold: Probabilidad mínima para predecir "delayed".
+        target_threshold: Fracción mínima del target que cuenta como
+            etiqueta positiva.
+
+    Returns:
+        Dict con ``bce_accuracy``, ``bce_precision``, ``bce_recall``,
+        ``bce_f1``.
+    """
+    probs = 1.0 / (1.0 + np.exp(-pct_logits))
+    pred_labels = (probs >= bce_threshold).astype(int)
+    target_labels = (pct_targets >= target_threshold).astype(int)
+
+    tp = int(np.sum((pred_labels == 1) & (target_labels == 1)))
+    fp = int(np.sum((pred_labels == 1) & (target_labels == 0)))
+    fn = int(np.sum((pred_labels == 0) & (target_labels == 1)))
+    tn = int(np.sum((pred_labels == 0) & (target_labels == 0)))
+
+    accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+
+    return {
+        "bce_accuracy": float(accuracy),
+        "bce_precision": float(precision),
+        "bce_recall": float(recall),
+        "bce_f1": float(f1),
+    }
+
+
 def compute_unified_metrics(
     predictions: np.ndarray,
     targets: np.ndarray,
     delay_threshold: float = 15.0,
+    pct_logits: np.ndarray | None = None,
+    pct_targets: np.ndarray | None = None,
 ) -> dict[str, float]:
     """Calcula métricas unificadas: regresión + clasificación derivada.
 
@@ -147,19 +213,34 @@ def compute_unified_metrics(
     de clasificación (Accuracy, Precision, Recall, F1) derivadas
     de aplicar un umbral de retraso a las predicciones continuas.
 
+    Si se pasan ``pct_logits`` y ``pct_targets`` (ruta multi-tarea de
+    W2), se añaden además las métricas ``bce_*`` del head BCE
+    dedicado, permitiendo comparar la decisión thresholded-from-
+    regression con la del clasificador entrenado explícitamente.
+
     Args:
-        predictions: Predicciones continuas (minutos de retraso).
-        targets: Valores reales continuos (minutos de retraso).
-        delay_threshold: Umbral en minutos para clasificación binaria.
+        predictions: Predicciones continuas de ArrDelay (minutos).
+        targets: Valores reales de ArrDelay (minutos).
+        delay_threshold: Umbral en minutos para clasificación derivada.
+        pct_logits: Logits del canal pct_arr_delayed (opcional).
+        pct_targets: Targets ∈ [0, 1] del canal pct (opcional).
 
     Returns:
-        Diccionario con todas las métricas (regresión + clasificación).
+        Diccionario con todas las métricas. Si los args ``pct_*`` están
+        presentes incluye también ``bce_accuracy/precision/recall/f1``.
     """
     regression = compute_all_metrics(predictions, targets)
     classification = compute_classification_metrics(
         predictions, targets, threshold=delay_threshold
     )
-    return {**regression, **classification}
+    out = {**regression, **classification}
+
+    if pct_logits is not None and pct_targets is not None:
+        out.update(
+            compute_bce_classification_metrics(pct_logits, pct_targets)
+        )
+
+    return out
 
 
 @torch.no_grad()
@@ -189,9 +270,13 @@ def evaluate_multi_horizon_graph_model(
     model.eval()
     num_horizons = len(prediction_horizons)
 
-    # Acumular predicciones y targets por horizonte
+    # Acumular predicciones y targets por horizonte. ``pct_*`` sólo se
+    # popula si el modelo emite el tercer canal (multi-tarea W2).
     all_preds: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
     all_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    all_pct_logits: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    all_pct_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    has_pct_head = False
 
     for graph in graphs:
         x = graph.x.to(device)
@@ -201,16 +286,40 @@ def evaluate_multi_horizon_graph_model(
         )
         mask = graph.active_mask
 
-        # Salida [num_nodes, num_horizons]
-        preds = model(x, edge_index, edge_attr=edge_attr)
-        preds = preds.cpu().numpy()
-
+        # Salida [num_nodes, num_horizons] o [num_nodes, num_horizons, C]
+        preds = model(x, edge_index, edge_attr=edge_attr).cpu().numpy()
         targets_np = graph.y.numpy()
         mask_np = mask.numpy()
 
+        # Detecta si el modelo emite el head pct (canal 2). Asumimos que
+        # si la última dim coincide con NUM_TARGET_CHANNELS estamos en
+        # multi-task; las dimensiones se ramifican aquí, no en el modelo.
+        pred_has_channels = preds.ndim == 3
+        target_has_channels = targets_np.ndim == 3
+
         for h_idx in range(num_horizons):
-            all_preds[h_idx].append(preds[mask_np, h_idx])
-            all_targets[h_idx].append(targets_np[mask_np, h_idx])
+            if pred_has_channels:
+                all_preds[h_idx].append(
+                    preds[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY]
+                )
+            else:
+                all_preds[h_idx].append(preds[mask_np, h_idx])
+
+            if target_has_channels:
+                all_targets[h_idx].append(
+                    targets_np[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY]
+                )
+            else:
+                all_targets[h_idx].append(targets_np[mask_np, h_idx])
+
+            if pred_has_channels and target_has_channels and preds.shape[-1] >= NUM_TARGET_CHANNELS:
+                has_pct_head = True
+                all_pct_logits[h_idx].append(
+                    preds[mask_np, h_idx, TARGET_CHANNEL_PCT_DELAYED]
+                )
+                all_pct_targets[h_idx].append(
+                    targets_np[mask_np, h_idx, TARGET_CHANNEL_PCT_DELAYED]
+                )
 
     if not all_preds[0]:
         empty = {
@@ -230,7 +339,17 @@ def evaluate_multi_horizon_graph_model(
     for h_idx, h in enumerate(prediction_horizons):
         preds_h = np.concatenate(all_preds[h_idx])
         targets_h = np.concatenate(all_targets[h_idx])
-        metrics_h = compute_unified_metrics(preds_h, targets_h, delay_threshold)
+        if has_pct_head:
+            pct_logits_h = np.concatenate(all_pct_logits[h_idx])
+            pct_targets_h = np.concatenate(all_pct_targets[h_idx])
+            metrics_h = compute_unified_metrics(
+                preds_h, targets_h, delay_threshold,
+                pct_logits=pct_logits_h, pct_targets=pct_targets_h,
+            )
+        else:
+            metrics_h = compute_unified_metrics(
+                preds_h, targets_h, delay_threshold,
+            )
         result[f"horizon_{h}h"] = metrics_h
         all_metrics_for_avg.append(metrics_h)
 
@@ -275,6 +394,9 @@ def evaluate_multi_horizon_sequence_model(
 
     all_preds: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
     all_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    all_pct_logits: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    all_pct_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
+    has_pct_head = False
 
     for sequence in sequences:
         # Move each graph in the sequence to device
@@ -297,9 +419,32 @@ def evaluate_multi_horizon_sequence_model(
         targets_np = last_graph.y.numpy()
         mask_np = last_graph.active_mask.numpy()
 
+        pred_has_channels = preds.ndim == 3
+        target_has_channels = targets_np.ndim == 3
+
         for h_idx in range(num_horizons):
-            all_preds[h_idx].append(preds[mask_np, h_idx])
-            all_targets[h_idx].append(targets_np[mask_np, h_idx])
+            if pred_has_channels:
+                all_preds[h_idx].append(
+                    preds[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY]
+                )
+            else:
+                all_preds[h_idx].append(preds[mask_np, h_idx])
+
+            if target_has_channels:
+                all_targets[h_idx].append(
+                    targets_np[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY]
+                )
+            else:
+                all_targets[h_idx].append(targets_np[mask_np, h_idx])
+
+            if pred_has_channels and target_has_channels and preds.shape[-1] >= NUM_TARGET_CHANNELS:
+                has_pct_head = True
+                all_pct_logits[h_idx].append(
+                    preds[mask_np, h_idx, TARGET_CHANNEL_PCT_DELAYED]
+                )
+                all_pct_targets[h_idx].append(
+                    targets_np[mask_np, h_idx, TARGET_CHANNEL_PCT_DELAYED]
+                )
 
     if not all_preds[0]:
         empty = {
@@ -318,7 +463,17 @@ def evaluate_multi_horizon_sequence_model(
     for h_idx, h in enumerate(prediction_horizons):
         preds_h = np.concatenate(all_preds[h_idx])
         targets_h = np.concatenate(all_targets[h_idx])
-        metrics_h = compute_unified_metrics(preds_h, targets_h, delay_threshold)
+        if has_pct_head:
+            pct_logits_h = np.concatenate(all_pct_logits[h_idx])
+            pct_targets_h = np.concatenate(all_pct_targets[h_idx])
+            metrics_h = compute_unified_metrics(
+                preds_h, targets_h, delay_threshold,
+                pct_logits=pct_logits_h, pct_targets=pct_targets_h,
+            )
+        else:
+            metrics_h = compute_unified_metrics(
+                preds_h, targets_h, delay_threshold,
+            )
         result[f"horizon_{h}h"] = metrics_h
         all_metrics_for_avg.append(metrics_h)
 

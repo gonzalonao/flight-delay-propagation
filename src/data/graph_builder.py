@@ -724,32 +724,109 @@ def compute_node_targets(
     return torch.nan_to_num(targets, nan=0.0)
 
 
+# Índices de canal estables para el tensor de target multi-tarea.
+# Todo el código (modelos, losses, métricas, reporting) referencia estos
+# nombres para evitar números mágicos y mantener el contrato sincronizado.
+TARGET_CHANNEL_ARR_DELAY = 0  # mean ArrDelay (min) — regresión primaria
+TARGET_CHANNEL_DEP_DELAY = 1  # mean DepDelay (min) — regresión auxiliar
+TARGET_CHANNEL_PCT_DELAYED = 2  # fracción ArrDelay≥threshold ∈ [0, 1] — BCE
+NUM_TARGET_CHANNELS = 3
+
+
+def compute_node_targets_multi_channel(
+    window_df: pd.DataFrame,
+    airport_map: dict[str, int],
+    delay_threshold: float = 15.0,
+) -> torch.Tensor:
+    """Versión multi-canal de :func:`compute_node_targets`.
+
+    Devuelve ``[num_nodes, NUM_TARGET_CHANNELS]`` con los tres canales
+    documentados en ``TARGET_CHANNEL_*``:
+
+      0) mean ArrDelay (min) por aeropuerto destino — target principal.
+      1) mean DepDelay (min) por aeropuerto destino — regresión auxiliar
+         (multi-task regularizer).
+      2) fracción de vuelos con ``ArrDelay >= delay_threshold`` ∈ [0, 1]
+         por aeropuerto destino — clasificación binaria a la que apunta
+         el head BCE del modelo multi-tarea.
+
+    Todos los canales se computan sobre la **misma** ventana (los vuelos
+    que llegan a Dest=airport en ``[h_start, h_end)``), por lo que NaN
+    en alguno se rellena con 0 igual que en la versión single-channel.
+
+    Args:
+        window_df: DataFrame de la ventana FUTURA (target), filtrado por
+            ``arr_timestamp`` (vuelos que LLEGAN en la ventana).
+        airport_map: Mapeo IATA → índice.
+        delay_threshold: Minutos de ArrDelay sobre los que un vuelo se
+            considera "retrasado" para el canal 2.
+
+    Returns:
+        Tensor ``[num_nodes, 3]`` (canales: arr_delay, dep_delay,
+        pct_arr_delayed_15).
+    """
+    num_nodes = len(airport_map)
+    targets = torch.zeros(num_nodes, NUM_TARGET_CHANNELS, dtype=torch.float32)
+
+    if window_df.empty:
+        return targets
+
+    has_dep = "DepDelay" in window_df.columns
+    for airport, group in window_df.groupby("Dest", observed=True):
+        if airport not in airport_map:
+            continue
+        idx = airport_map[airport]
+        arr = group["ArrDelay"].to_numpy(dtype="float32", na_value=np.nan)
+        arr_valid = arr[~np.isnan(arr)]
+        if arr_valid.size > 0:
+            targets[idx, TARGET_CHANNEL_ARR_DELAY] = float(np.mean(arr_valid))
+            targets[idx, TARGET_CHANNEL_PCT_DELAYED] = float(
+                np.mean(arr_valid >= delay_threshold)
+            )
+        if has_dep:
+            dep = group["DepDelay"].to_numpy(dtype="float32", na_value=np.nan)
+            dep_valid = dep[~np.isnan(dep)]
+            if dep_valid.size > 0:
+                targets[idx, TARGET_CHANNEL_DEP_DELAY] = float(np.mean(dep_valid))
+
+    return torch.nan_to_num(targets, nan=0.0)
+
+
 def compute_multi_horizon_targets(
     df: pd.DataFrame,
     airport_map: dict[str, int],
     current_end: pd.Timestamp,
     window_delta: pd.Timedelta,
     horizons: list[int],
+    delay_threshold: float = 15.0,
 ) -> torch.Tensor | None:
-    """Genera targets multi-horizonte: retraso promedio a N ventanas futuras.
+    """Genera targets multi-horizonte multi-canal.
 
-    Para cada horizonte h en horizons, calcula el retraso promedio de
-    salida en la ventana [current_end + (h-1)*delta, current_end + h*delta).
+    Para cada horizonte h en ``horizons``, computa los 3 canales de
+    target sobre los vuelos que LLEGAN en la ventana
+    ``[current_end + (h-1)*delta, current_end + h*delta)``. Ver
+    :func:`compute_node_targets_multi_channel` para la semántica de cada
+    canal.
 
     Args:
-        df: DataFrame completo con columna 'timestamp'.
-        airport_map: Mapeo de código IATA a índice.
+        df: DataFrame completo con columna ``arr_timestamp`` (preferido)
+            o ``timestamp`` (fallback).
+        airport_map: Mapeo IATA → índice.
         current_end: Fin de la ventana actual de features.
         window_delta: Duración de cada ventana temporal.
-        horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
+        horizons: Lista de horizontes (e.g., ``[1, 2, 4, 6, 8]``).
+        delay_threshold: Umbral en minutos para el canal de clasificación.
 
     Returns:
-        Tensor [num_nodes, num_horizons] o None si algún horizonte
-        no tiene datos suficientes.
+        Tensor ``[num_nodes, num_horizons, NUM_TARGET_CHANNELS]`` o
+        ``None`` si algún horizonte no tiene >=10 vuelos (proxy de "datos
+        suficientes" — heredado de la versión anterior).
     """
     num_nodes = len(airport_map)
     num_horizons = len(horizons)
-    targets = torch.zeros(num_nodes, num_horizons, dtype=torch.float32)
+    targets = torch.zeros(
+        num_nodes, num_horizons, NUM_TARGET_CHANNELS, dtype=torch.float32,
+    )
 
     # La columna `arr_timestamp` (creada en `create_temporal_graphs`) es la
     # clave correcta para la ventana del target: queremos los vuelos que
@@ -765,8 +842,9 @@ def compute_multi_horizon_targets(
         if len(h_df) < 10:
             return None
 
-        h_targets = compute_node_targets(h_df, airport_map)
-        targets[:, h_idx] = h_targets
+        targets[:, h_idx, :] = compute_node_targets_multi_channel(
+            h_df, airport_map, delay_threshold=delay_threshold,
+        )
 
     return targets
 
@@ -877,10 +955,13 @@ def create_temporal_graphs(
         current_end = current_time + window_delta
 
         if multi_horizon:
-            # Targets multi-horizonte: [num_nodes, num_horizons]
+            # Targets multi-horizonte multi-canal: [num_nodes, num_horizons, 3]
+            # (arr_delay, dep_delay, pct_arr_delayed_15). El canal de
+            # clasificación necesita el umbral, así que se propaga al builder.
             node_targets = compute_multi_horizon_targets(
                 df, airport_map, current_end, window_delta,
                 prediction_horizons,
+                delay_threshold=delay_threshold,
             )
             if node_targets is None:
                 current_time += window_delta
@@ -1003,7 +1084,9 @@ def normalize_graph_features(
 # Versión del esquema de features de grafo. Cualquier cambio en el contrato
 # de columnas de x/edge_attr/y debe incrementar este valor para invalidar
 # cachés en disco que asuman el esquema anterior.
-GRAPH_SCHEMA_VERSION = 2
+#   v2 → v3 (W2 multi-task): los targets multi-horizonte pasan de
+#         ``[N, H]`` a ``[N, H, 3]`` (canales arr_delay/dep_delay/pct_15).
+GRAPH_SCHEMA_VERSION = 3
 
 
 def _snapshot_cache_key(
