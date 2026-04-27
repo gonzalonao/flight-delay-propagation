@@ -1,13 +1,27 @@
 """Funciones de pérdida para modelos de predicción de retrasos.
 
 Incluye pérdidas estándar y variantes ponderadas para el problema
-de predicción multi-horizonte. Funciona con tensores 1D [N] (single-
-horizon) y 2D [N, H] (multi-horizonte).
+de predicción multi-horizonte. Funciona con tensores 1D [N]
+(single-horizon), 2D [N, H] (multi-horizonte single-task) y 3D [N, H, C]
+(multi-horizonte multi-task introducido en W2 — canales arr_delay,
+dep_delay_aux, pct_arr_delayed_15_logit).
+
+Las pérdidas single-task (``WeightedMSELoss``, ``WeightedHuberLoss``)
+toleran que el target llegue con un canal extra y se quedan con el
+canal 0 (ArrDelay). Esto evita que actualizar el shape del target en el
+graph_builder rompa modelos que aún tienen ``output_channels=1``.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from src.data.graph_builder import (
+    NUM_TARGET_CHANNELS,
+    TARGET_CHANNEL_ARR_DELAY,
+    TARGET_CHANNEL_DEP_DELAY,
+    TARGET_CHANNEL_PCT_DELAYED,
+)
 
 
 class _WeightedRegressionLossBase(nn.Module):
@@ -64,7 +78,17 @@ class _WeightedRegressionLossBase(nn.Module):
     def forward(
         self, predictions: torch.Tensor, targets: torch.Tensor
     ) -> torch.Tensor:
-        """Aplica ponderación por delay y horizonte sobre el error puntual."""
+        """Aplica ponderación por delay y horizonte sobre el error puntual.
+
+        Si ``targets`` tiene 3 dimensiones ``[N, H, C]`` (formato W2
+        multi-task) y ``predictions`` tiene 2 ``[N, H]``, se reduce el
+        target al canal 0 (ArrDelay). Esto permite que un modelo
+        single-task siga entrenándose sobre datos multi-canal sin que el
+        usuario tenga que pre-recortarlos.
+        """
+        if predictions.dim() == 2 and targets.dim() == 3:
+            targets = targets[..., TARGET_CHANNEL_ARR_DELAY]
+
         err = self._pointwise_loss(predictions, targets)
 
         # Peso por delay: más peso a retrasos altos.
@@ -131,3 +155,156 @@ class WeightedHuberLoss(_WeightedRegressionLossBase):
         return F.huber_loss(
             predictions, targets, reduction="none", delta=self.delta
         )
+
+
+class MultiTaskLoss(nn.Module):
+    """Pérdida combinada para los 3 canales del head multi-tarea de W2.
+
+    Espera ``predictions`` y ``targets`` de shape ``[N, H, 3]`` con el
+    contrato de canales documentado en ``src.data.graph_builder``:
+
+      0) arr_delay (min)               — regresión primaria, Huber ponderado
+      1) dep_delay (min)               — regresión auxiliar, Huber ponderado
+      2) pct_arr_delayed_15 ∈ [0, 1]   — clasificación, BCEWithLogits
+
+    Las ponderaciones por horizonte se aplican a las tres tareas para
+    favorecer los horizontes de negocio (4-8 h). El umbral de retraso
+    alto se aplica sólo a las dos pérdidas de regresión — para BCE no
+    tiene sentido (el target ya es la fracción de delayed).
+
+    Cada componente se loguea como atributo ``last_components`` tras el
+    forward, útil para introspección en el trainer / TensorBoard.
+
+    Args:
+        main_weight: Peso de la pérdida de ArrDelay (canal 0).
+        aux_weight: Peso de la pérdida de DepDelay auxiliar (canal 1).
+        bce_weight: Peso de la pérdida BCE (canal 2).
+        high_delay_threshold: Umbral en min para regresiones ponderadas.
+        high_delay_weight: Multiplicador para muestras retrasadas.
+        horizon_weights: Pesos por horizonte (mismo shape para los 3 heads).
+        huber_delta: Delta de Huber para las dos regresiones.
+        bce_pos_weight: Peso de la clase positiva en BCE — útil cuando el
+            target binario está desbalanceado (mayoría de aeropuertos
+            puntuales). ``None`` desactiva el rebalanceo. Si se da, se
+            usa como ``pos_weight`` de ``BCEWithLogitsLoss``.
+
+    Raises:
+        ValueError: Si todos los pesos son cero (la pérdida sería trivialmente 0).
+    """
+
+    def __init__(
+        self,
+        main_weight: float = 1.0,
+        aux_weight: float = 0.3,
+        bce_weight: float = 0.5,
+        high_delay_threshold: float = 15.0,
+        high_delay_weight: float = 2.0,
+        horizon_weights: list[float] | None = None,
+        huber_delta: float = 10.0,
+        bce_pos_weight: float | None = None,
+    ) -> None:
+        super().__init__()
+        if main_weight + aux_weight + bce_weight <= 0:
+            raise ValueError(
+                "MultiTaskLoss: al menos uno de "
+                "(main_weight, aux_weight, bce_weight) debe ser > 0."
+            )
+
+        self.main_weight = float(main_weight)
+        self.aux_weight = float(aux_weight)
+        self.bce_weight = float(bce_weight)
+        self.delta = huber_delta
+        self.threshold = high_delay_threshold
+        self.high_weight = high_delay_weight
+
+        if horizon_weights is not None:
+            hw = torch.tensor(horizon_weights, dtype=torch.float32)
+            hw = hw * len(horizon_weights) / hw.sum()
+            self.register_buffer("horizon_weights", hw)
+        else:
+            self.horizon_weights = None
+
+        if bce_pos_weight is not None:
+            self.register_buffer(
+                "bce_pos_weight", torch.tensor(float(bce_pos_weight))
+            )
+        else:
+            self.bce_pos_weight = None
+
+        # Snapshot del último forward para logging — no afecta al graph.
+        self.last_components: dict[str, float] = {}
+
+    def _weighted_huber(
+        self, pred: torch.Tensor, target: torch.Tensor
+    ) -> torch.Tensor:
+        """Huber ponderado por delay alto + horizonte. Devuelve escalar."""
+        err = F.huber_loss(pred, target, reduction="none", delta=self.delta)
+        weights = torch.ones_like(target)
+        weights[target.abs() >= self.threshold] = self.high_weight
+        if self.horizon_weights is not None and target.dim() == 2:
+            hw = self.horizon_weights.to(target.device)
+            weights = weights * hw.unsqueeze(0)
+        return (err * weights).mean()
+
+    def _weighted_bce(
+        self, logits: torch.Tensor, target: torch.Tensor
+    ) -> torch.Tensor:
+        """BCEWithLogits ponderado por horizonte (target ya es ∈ [0, 1])."""
+        pos_weight = (
+            self.bce_pos_weight if self.bce_pos_weight is not None else None
+        )
+        err = F.binary_cross_entropy_with_logits(
+            logits, target, reduction="none", pos_weight=pos_weight,
+        )
+        if self.horizon_weights is not None and target.dim() == 2:
+            hw = self.horizon_weights.to(target.device)
+            err = err * hw.unsqueeze(0)
+        return err.mean()
+
+    def forward(
+        self, predictions: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
+        """Combina las 3 sub-pérdidas con pesos configurables."""
+        if predictions.dim() != 3 or targets.dim() != 3:
+            raise ValueError(
+                "MultiTaskLoss espera tensores 3D [N, H, C]; "
+                f"recibido predictions={tuple(predictions.shape)}, "
+                f"targets={tuple(targets.shape)}."
+            )
+        if predictions.size(-1) < NUM_TARGET_CHANNELS or targets.size(-1) < NUM_TARGET_CHANNELS:
+            raise ValueError(
+                f"Last dim debe ser >= {NUM_TARGET_CHANNELS} (arr, dep, pct); "
+                f"recibido pred={predictions.size(-1)}, "
+                f"target={targets.size(-1)}."
+            )
+
+        arr_loss = self._weighted_huber(
+            predictions[..., TARGET_CHANNEL_ARR_DELAY],
+            targets[..., TARGET_CHANNEL_ARR_DELAY],
+        )
+        dep_loss = self._weighted_huber(
+            predictions[..., TARGET_CHANNEL_DEP_DELAY],
+            targets[..., TARGET_CHANNEL_DEP_DELAY],
+        )
+        bce_loss = self._weighted_bce(
+            predictions[..., TARGET_CHANNEL_PCT_DELAYED],
+            # El target del canal pct vive en [0, 1]; lo clampeamos por
+            # seguridad numérica (no debería estar fuera de ese rango).
+            targets[..., TARGET_CHANNEL_PCT_DELAYED].clamp(0.0, 1.0),
+        )
+
+        total = (
+            self.main_weight * arr_loss
+            + self.aux_weight * dep_loss
+            + self.bce_weight * bce_loss
+        )
+
+        # Snapshot escalar para logging — no se usa en backward.
+        self.last_components = {
+            "arr_huber": float(arr_loss.detach()),
+            "dep_huber": float(dep_loss.detach()),
+            "pct_bce": float(bce_loss.detach()),
+            "total": float(total.detach()),
+        }
+
+        return total

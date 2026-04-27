@@ -40,7 +40,7 @@ from src.models.factory import (
     build_model,
 )
 from src.training.graph_trainer import GraphTrainer, SequenceGraphTrainer
-from src.training.losses import WeightedHuberLoss, WeightedMSELoss
+from src.training.losses import MultiTaskLoss, WeightedHuberLoss, WeightedMSELoss
 from src.training.trainer import Trainer
 from src.utils.config import load_config
 from src.utils.device import select_device
@@ -108,6 +108,12 @@ def _build_criterion(config: dict) -> torch.nn.Module:
     - ``"weighted_mse"``: MSE con ponderación por delay + horizonte.
     - ``"weighted_huber"``: Huber con ponderación por delay + horizonte,
       delta configurable vía ``training.huber_delta`` (default 10 min).
+    - ``"multi_task"`` (W2): combina ``Huber(arr) + aux·Huber(dep) +
+      bce·BCE(pct_15)`` con pesos configurables vía el bloque
+      ``training.multi_task``. Sólo tiene efecto sobre los modelos
+      multi-horizonte cuando además ``factory.build_model`` los crea con
+      ``output_channels=3`` (lo hace automáticamente al ver esta
+      ``loss``).
 
     Args:
         config: Configuración completa.
@@ -149,6 +155,34 @@ def _build_criterion(config: dict) -> torch.nn.Module:
                 "peso=%.1f%s)",
                 delta, delay_threshold, delay_weight, hw_str,
             )
+        return criterion
+
+    if loss_name == "multi_task":
+        delay_threshold = config.get("evaluation", {}).get(
+            "delay_threshold_minutes", 15
+        )
+        delay_weight = training_config.get("delay_weight", 2.0)
+        horizon_weights = training_config.get("horizon_weights")
+        delta = training_config.get("huber_delta", 10.0)
+        mt_cfg = training_config.get("multi_task", {}) or {}
+        criterion = MultiTaskLoss(
+            main_weight=mt_cfg.get("main_weight", 1.0),
+            aux_weight=mt_cfg.get("aux_weight", 0.3),
+            bce_weight=mt_cfg.get("bce_weight", 0.5),
+            high_delay_threshold=delay_threshold,
+            high_delay_weight=delay_weight,
+            horizon_weights=horizon_weights,
+            huber_delta=delta,
+            bce_pos_weight=mt_cfg.get("bce_pos_weight"),
+        )
+        logger.info(
+            "Pérdida: MultiTask (main=%.2f, aux=%.2f, bce=%.2f, "
+            "huber_delta=%.1f, umbral=%.0f min, peso_delay=%.1f, "
+            "horizon_weights=%s, bce_pos_weight=%s)",
+            criterion.main_weight, criterion.aux_weight, criterion.bce_weight,
+            delta, delay_threshold, delay_weight, horizon_weights,
+            mt_cfg.get("bce_pos_weight"),
+        )
         return criterion
 
     return torch.nn.MSELoss()

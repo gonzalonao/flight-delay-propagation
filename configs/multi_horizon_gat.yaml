@@ -97,10 +97,18 @@ training:
   patience: 20
   gradient_clip: 1.0
   num_workers: 4
-  loss: weighted_huber
-  huber_delta: 10.0                 # transición MSE→MAE a ±10 min (robusto a cola larga)
+  # W2: pérdida multi-tarea (regresión ArrDelay + reg auxiliar DepDelay
+  # + clasificación BCE de pct_arr_delayed_15). El factory ve esta
+  # pérdida y construye el modelo con output_channels=3 automáticamente.
+  loss: multi_task
+  huber_delta: 10.0                 # transición MSE→MAE a ±10 min en las dos regresiones
   delay_weight: 2.0
   horizon_weights: [3, 3, 4, 5, 5]  # Favorece horizontes de negocio (4-8 h)
+  multi_task:
+    main_weight: 1.0   # Huber sobre ArrDelay (canal 0) — target principal
+    aux_weight: 0.3    # Huber sobre DepDelay aux (canal 1) — regularizador
+    bce_weight: 0.5    # BCE sobre pct_arr_delayed_15 (canal 2) — Precision/Recall/F1
+    bce_pos_weight: null  # subir (e.g. 2.0) si recall queda muy por debajo de precision
 
 evaluation:
   metrics: [mae, rmse, mape, r2]

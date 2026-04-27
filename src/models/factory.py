@@ -93,6 +93,12 @@ def build_model(
         "prediction_horizons", [1, 2, 4, 6, 8],
     )
 
+    # Multi-task (W2): activamos los 3 canales de salida del modelo
+    # cuando ``training.loss == "multi_task"``. Vivir en el factory
+    # mantiene la decisión en un único sitio — el config dice qué
+    # entrenar y la fábrica configura el modelo en consecuencia.
+    output_channels = _resolve_output_channels(config, model_name)
+
     if model_name == "multi_horizon_gat":
         return MultiHorizonGAT(
             input_dim=input_dim,
@@ -102,6 +108,7 @@ def build_model(
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
             edge_dim=edge_dim,
+            output_channels=output_channels,
         )
 
     if model_name == "spatiotemporal_gnn":
@@ -114,6 +121,7 @@ def build_model(
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
             edge_dim=edge_dim,
+            output_channels=output_channels,
         )
 
     if model_name == "seq2seq_gnn":
@@ -140,9 +148,32 @@ def build_model(
             num_horizons=len(horizons),
             dropout=model_config.get("dropout", 0.3),
             edge_dim=edge_dim,
+            output_channels=output_channels,
         )
 
     raise ValueError(
         f"Modelo no reconocido: '{model_name}'. "
         f"Disponibles: {sorted(MODEL_REGISTRY.keys())}"
     )
+
+
+# Número de canales del head multi-tarea de W2 — tres tareas: arr_delay
+# (regresión primaria), dep_delay (regresión auxiliar) y pct_arr_delayed_15
+# (clasificación). Coincide con ``NUM_TARGET_CHANNELS`` en graph_builder
+# pero lo redeclaramos aquí para no introducir un import circular del
+# data layer en el factory.
+_MULTI_TASK_OUTPUT_CHANNELS = 3
+
+
+def _resolve_output_channels(config: dict, model_name: str) -> int:
+    """Determina ``output_channels`` para los modelos multi-horizonte.
+
+    Devuelve 3 si y sólo si el modelo es multi-horizonte y la pérdida
+    configurada es ``"multi_task"`` (única forma soportada de consumir
+    el tercer canal). Para cualquier otro caso devuelve 1 (output
+    histórico ``[N, H]``).
+    """
+    if model_name not in MULTI_HORIZON_MODELS:
+        return 1
+    loss_name = (config.get("training", {}) or {}).get("loss")
+    return _MULTI_TASK_OUTPUT_CHANNELS if loss_name == "multi_task" else 1

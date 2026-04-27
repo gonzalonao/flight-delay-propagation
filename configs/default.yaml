@@ -131,6 +131,17 @@ training:
                                  # 'cuda' falla duro si no hay GPU disponible
                                  # (recomendado para evitar runs en CPU
                                  # silenciosos). 'auto' cae a CPU con warning.
+  # Soportadas: mse | weighted_mse | weighted_huber | multi_task.
+  # ``multi_task`` (W2) sólo tiene efecto en multi_horizon_gat,
+  # spatiotemporal_gnn y seq2seq_gnn — el factory los crea con
+  # output_channels=3 al verla. Para baselines (DenseNN, BasicGCN) usa
+  # mse o weighted_huber.
+  # loss: multi_task
+  multi_task:
+    main_weight: 1.0   # Huber sobre ArrDelay (canal 0) — target principal
+    aux_weight: 0.3    # Huber sobre DepDelay aux (canal 1) — regularizador
+    bce_weight: 0.5    # BCE sobre pct_arr_delayed_15 (canal 2) — Precision/Recall/F1
+    bce_pos_weight: null  # subir (e.g. 2.0) si recall queda por debajo de precision
 
 evaluation:
   metrics: [mae, rmse, mape, r2]

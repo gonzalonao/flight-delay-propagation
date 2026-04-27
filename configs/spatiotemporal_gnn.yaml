@@ -97,10 +97,16 @@ training:
   patience: 25
   gradient_clip: 1.0
   num_workers: 4
-  loss: weighted_huber
+  # W2: ver multi_horizon_gat.yaml para una explicación de la pérdida.
+  loss: multi_task
   huber_delta: 10.0
   delay_weight: 2.0
   horizon_weights: [3, 3, 4, 5, 5]  # Favorece horizontes de negocio (4-8 h)
+  multi_task:
+    main_weight: 1.0
+    aux_weight: 0.3
+    bce_weight: 0.5
+    bce_pos_weight: null
 
 evaluation:
   metrics: [mae, rmse, mape, r2]

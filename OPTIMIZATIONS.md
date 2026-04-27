@@ -40,14 +40,14 @@
 
 ## Targets
 - [x] Primary target: DepDelay → ArrDelay  // applied in commit D; agrupado por Dest, ventana del target keada por arr_timestamp (CRSArrTime)
-- [ ] Add classification head: pct_arr_delayed_15
-- [ ] Add auxiliary regression head: DepDelay (multi-task, λ=0.3)
+- [x] Add classification head: pct_arr_delayed_15  // applied in W2 commit; canal 2 del target multi-tarea, BCEWithLogits via MultiTaskLoss; métricas bce_* en evaluate_multi_horizon_*
+- [x] Add auxiliary regression head: DepDelay (multi-task, λ=0.3)  // applied in W2 commit; canal 1, Huber ponderado idéntico al canal 0
 
 ## Horizons & loss
 - [x] Horizons: [1,2,3,4,5] → [1,2,4,6,8]  // applied in commit H; cambio en 5 configs (default + 4 per-model)
 - [x] Horizon weights: [5,4,3,2,1] → [3,3,4,5,5] (favor business horizons)  // applied in commit I; 3 configs multi-horizonte (gat, spatiotemporal, seq2seq)
 - [x] Regression loss: MSE → Huber (δ=10)  // applied in commit I; WeightedHuberLoss via base compartida _WeightedRegressionLossBase; WeightedMSELoss mantenido para ablación
-- [ ] WeightedMSE → multi-task Huber + 0.3·Huber_aux + 0.5·BCE
+- [x] WeightedMSE → multi-task Huber + 0.3·Huber_aux + 0.5·BCE  // applied in W2 commit; nueva loss `multi_task` activable vía `training.loss`; pesos via `training.multi_task.{main,aux,bce}_weight`; el factory crea modelos con `output_channels=3` automáticamente
 
 ## Architecture — applies per-model (toggle independently)
 - [x] GATConv → GATv2Conv with edge_dim=5  // applied in commit F (multi_horizon_gat + spatiotemporal/seq2seq vía GATEncoder)
