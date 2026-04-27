@@ -174,6 +174,26 @@ class TestSpatioTemporalGNN:
             out = model(seq)
             assert out.shape == (4, 5)
 
+    def test_output_channels_widens_to_multitask(self, graph_sequence):
+        """Con output_channels=3 (W2), output es [N, H, 3]."""
+        model = SpatioTemporalGNN(
+            input_dim=6, gnn_hidden=16, lstm_hidden=32,
+            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            output_channels=3,
+        )
+        model.eval()
+        out = model(graph_sequence)
+        assert out.shape == (4, 5, 3)
+
+    def test_invalid_output_channels_raises(self):
+        """output_channels < 1 debe lanzar ValueError al construir."""
+        with pytest.raises(ValueError, match=">= 1"):
+            SpatioTemporalGNN(
+                input_dim=6, gnn_hidden=16, lstm_hidden=32,
+                num_heads=2, num_gnn_layers=2, num_horizons=5,
+                output_channels=0,
+            )
+
     def test_more_params_than_gat(self, graph_sequence):
         """SpatioTemporalGNN debe tener mas parametros que MultiHorizonGAT."""
         from src.models.multi_horizon_gat import MultiHorizonGAT

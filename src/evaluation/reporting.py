@@ -69,6 +69,8 @@ def log_multi_horizon_results(
     log.info("RESULTADOS EN TEST — %s (multi-horizonte)", model_name)
     log.info("=" * 60)
 
+    has_bce = "bce_f1" in metrics["average"]
+
     for h in horizons:
         key = f"horizon_{h}h"
         m = metrics[key]
@@ -78,9 +80,15 @@ def log_multi_horizon_results(
             m["mae"], m["rmse"], m["mape"], m["r2"],
         )
         log.info(
-            "    Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f",
+            "    Cls (regr-thr): Acc=%.4f Prec=%.4f Rec=%.4f F1=%.4f",
             m["accuracy"], m["precision"], m["recall"], m["f1"],
         )
+        if has_bce:
+            log.info(
+                "    Cls (BCE head): Acc=%.4f Prec=%.4f Rec=%.4f F1=%.4f",
+                m["bce_accuracy"], m["bce_precision"],
+                m["bce_recall"], m["bce_f1"],
+            )
 
     avg = metrics["average"]
     log.info("-" * 60)
@@ -90,9 +98,15 @@ def log_multi_horizon_results(
     log.info("      RMSE: %.4f min", avg["rmse"])
     log.info("      MAPE: %.4f %%", avg["mape"])
     log.info("      R²:   %.4f", avg["r2"])
-    log.info("    Clasificación (umbral=15 min):")
+    log.info("    Clasificación derivada del regresor (umbral=15 min):")
     log.info("      ACCURACY:  %.4f", avg["accuracy"])
     log.info("      PRECISION: %.4f", avg["precision"])
     log.info("      RECALL:    %.4f", avg["recall"])
     log.info("      F1:        %.4f", avg["f1"])
+    if has_bce:
+        log.info("    Clasificación del head BCE (sigmoid + 0.5):")
+        log.info("      ACCURACY:  %.4f", avg["bce_accuracy"])
+        log.info("      PRECISION: %.4f", avg["bce_precision"])
+        log.info("      RECALL:    %.4f", avg["bce_recall"])
+        log.info("      F1:        %.4f", avg["bce_f1"])
     log.info("=" * 60)

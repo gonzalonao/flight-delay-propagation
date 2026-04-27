@@ -20,6 +20,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from torch_geometric.data import Data
@@ -30,6 +31,7 @@ from src.models.factory import (
     SEQUENCE_MODELS,
     build_model,
 )
+from src.training.losses import MultiTaskLoss
 from src.utils.io import load_checkpoint, save_checkpoint
 
 # ---------------------------------------------------------------------------
@@ -201,6 +203,51 @@ def test_sequence_graph_model_smoke(model_name: str) -> None:
     loss = torch.nn.functional.mse_loss(pred, target)
     assert torch.isfinite(loss), f"{model_name}: loss no finita"
     loss.backward()
+
+
+@pytest.mark.parametrize("model_name", sorted(MULTI_HORIZON_MODELS))
+def test_multi_task_smoke(model_name: str) -> None:
+    """W2: cuando ``training.loss == "multi_task"`` el factory crea el
+    modelo con ``output_channels=3`` y el forward + backward sobre
+    ``MultiTaskLoss`` con target ``[N, H, 3]`` debe dar loss finita.
+    """
+    config = _make_config(model_name)
+    config["training"] = {"loss": "multi_task"}
+    snapshot = _make_snapshot()
+    edge_dim = snapshot.edge_attr.shape[1]
+    model = build_model(config, input_dim=INPUT_DIM, edge_dim=edge_dim)
+    model.train()
+
+    # Target multi-canal [N, H, 3] — canal pct ∈ [0, 1].
+    y_arr = torch.randn(NUM_NODES, NUM_HORIZONS)
+    y_dep = torch.randn(NUM_NODES, NUM_HORIZONS)
+    y_pct = torch.rand(NUM_NODES, NUM_HORIZONS)
+    y_multi = torch.stack([y_arr, y_dep, y_pct], dim=-1)
+    assert y_multi.shape == (NUM_NODES, NUM_HORIZONS, 3)
+
+    if model_name in SEQUENCE_MODELS:
+        sequence = [_make_snapshot() for _ in range(SEQUENCE_LEN)]
+        pred = model(sequence)
+    else:
+        pred = model(snapshot.x, snapshot.edge_index, snapshot.edge_attr)
+
+    assert pred.shape == (NUM_NODES, NUM_HORIZONS, 3), (
+        f"{model_name}: pred shape {pred.shape} != ({NUM_NODES}, {NUM_HORIZONS}, 3)"
+    )
+
+    criterion = MultiTaskLoss(
+        main_weight=1.0, aux_weight=0.3, bce_weight=0.5,
+        horizon_weights=[1.0] * NUM_HORIZONS,
+    )
+    loss = criterion(pred, y_multi)
+    assert torch.isfinite(loss), f"{model_name}: multi_task loss no finita"
+    loss.backward()
+
+    # Componentes individuales registradas en el último forward.
+    components = criterion.last_components
+    for key in ("arr_huber", "dep_huber", "pct_bce", "total"):
+        assert key in components, f"falta componente {key} en MultiTaskLoss"
+        assert np.isfinite(components[key]), f"componente {key} no finita"
 
 
 def test_checkpoint_roundtrip_with_model_name() -> None:

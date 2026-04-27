@@ -31,6 +31,12 @@ class MultiHorizonGAT(nn.Module):
         dropout: Probabilidad de dropout.
         edge_dim: Dimensión del tensor edge_attr (5 con la pipeline
             actual). Si ``None``, GATv2Conv ignora el edge_attr.
+        output_channels: Número de canales por horizonte. ``1`` (por
+            defecto) preserva el comportamiento histórico — output
+            ``[N, H]`` con sólo la regresión de ArrDelay. ``3`` activa la
+            cabeza multi-tarea de W2: output ``[N, H, 3]`` con canales
+            ``(arr_delay, dep_delay_aux, pct_arr_delayed_15_logit)``,
+            consumido por ``MultiTaskLoss`` y por las métricas BCE.
     """
 
     def __init__(
@@ -42,12 +48,19 @@ class MultiHorizonGAT(nn.Module):
         num_horizons: int = 5,
         dropout: float = 0.3,
         edge_dim: int | None = None,
+        output_channels: int = 1,
     ) -> None:
         super().__init__()
+
+        if output_channels < 1:
+            raise ValueError(
+                f"output_channels debe ser >= 1, recibido {output_channels}"
+            )
 
         self.dropout = dropout
         self.num_horizons = num_horizons
         self.edge_dim = edge_dim
+        self.output_channels = output_channels
 
         self.convs = nn.ModuleList()
         self.bns = nn.ModuleList()
@@ -95,11 +108,16 @@ class MultiHorizonGAT(nn.Module):
 
         final_dim = hidden_channels
 
+        # El head proyecta a `num_horizons * output_channels` y luego se
+        # reshape al tensor final. Una única capa lineal compartida entre
+        # todos los canales y horizontes es lo más simple y mantiene
+        # conteo de parámetros casi idéntico al diseño anterior cuando
+        # output_channels=1.
         self.horizon_head = nn.Sequential(
             nn.Linear(final_dim, final_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(final_dim, num_horizons),
+            nn.Linear(final_dim, num_horizons * output_channels),
         )
 
     def forward(
@@ -118,7 +136,10 @@ class MultiHorizonGAT(nn.Module):
                 caso pasa íntegro a GATv2Conv como atributos de arista.
 
         Returns:
-            Predicciones por nodo [num_nodes, num_horizons].
+            Si ``output_channels == 1``: tensor ``[num_nodes,
+            num_horizons]`` (compatibilidad con el diseño previo).
+            Si ``output_channels > 1``: tensor ``[num_nodes,
+            num_horizons, output_channels]`` para multi-tarea (W2).
         """
         # GATv2Conv acepta edge_attr siempre que su última dim coincida
         # con `edge_dim`. Si recibimos un tensor 1D (legado), lo
@@ -132,4 +153,7 @@ class MultiHorizonGAT(nn.Module):
             x = F.elu(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
 
-        return self.horizon_head(x)
+        out = self.horizon_head(x)
+        if self.output_channels == 1:
+            return out  # [N, H] — comportamiento histórico
+        return out.view(out.size(0), self.num_horizons, self.output_channels)
