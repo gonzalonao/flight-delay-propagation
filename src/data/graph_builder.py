@@ -136,10 +136,17 @@ def _build_history_lookups(
     # Para std necesitamos una serie con todas las observaciones de cada
     # vuelo (no solo la media por bucket); aproximamos con std de las
     # medias horarias en la ventana, suficiente como señal de volatilidad.
+    # Si ``rolling_steps == 1`` (caso degenerado donde la ventana cubre
+    # exactamente ROLLING_WINDOW_HOURS o más), pandas rechaza
+    # ``min_periods=2 > window=1``. En ese caso la std no es definible
+    # con una sola observación; clampamos ``min_periods`` para que el
+    # cálculo devuelva NaN (luego se rellena con 0.0). En todas las
+    # configs de producción (``temporal_window_hours`` ∈ {1, 2}) el
+    # clamp no se activa y la pérdida es estrictamente la misma.
     rolling_std = (
         arr_delay_by_airport_hour
         .groupby(level=0, observed=True)
-        .rolling(window=rolling_steps, min_periods=2)
+        .rolling(window=rolling_steps, min_periods=min(2, rolling_steps))
         .std()
         .reset_index(level=0, drop=True)
         .fillna(0.0)
