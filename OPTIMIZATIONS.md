@@ -77,7 +77,7 @@
 ## Code hygiene (no accuracy impact, affects iteration speed)
 - [x] Single model factory in src/models/factory.py  // applied in commit 2172eec; elimina divergencia detectada (evaluate.py no propagaba ``activation`` a DenseNN)
 - [x] Single results reporter in src/evaluation/reporting.py  // applied in commit 2172eec; train.py + evaluate.py importan log_test_results / log_multi_horizon_results
-- [ ] BaseTrainer + 2 subclasses (collapse 3 trainer classes)
+- [x] BaseTrainer + 2 subclasses (collapse 3 trainer classes)  // applied in W4.3; ciclo train/val/early-stop/checkpoint/scheduler vive en src/training/base_trainer.py; Trainer, GraphTrainer y SequenceGraphTrainer solo aportan _forward_batch + _align_for_val + wrappers de API pública
 - [ ] Remove abandoned LSTM stub from configs and README
 - [ ] Lightweight per-model dataclass for config validation
 
