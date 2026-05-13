@@ -1,27 +1,30 @@
-"""Bucle de entrenamiento genérico reutilizable para todos los modelos.
+"""Bucle de entrenamiento tabular reutilizable para modelos densos.
 
-Gestiona el ciclo train/validation, logging de métricas, early stopping
-y guardado de checkpoints. Diseñado para funcionar con cualquier modelo
-que acepte batches de (features, targets).
+Wrapper fino sobre :class:`BaseTrainer` que solo conoce el contrato de
+DataLoader ``(features, targets)``. Toda la lógica de epochs, early
+stopping, checkpoint y scheduler vive en la clase base (W4.3).
 """
+
+from typing import Iterable
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.training.callbacks import EarlyStopping, ModelCheckpoint
+from src.training.base_trainer import BaseTrainer
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 
-class Trainer:
-    """Entrenador genérico para modelos de PyTorch.
+class Trainer(BaseTrainer):
+    """Entrenador tabular para modelos densos (DenseNN, etc.).
 
     Args:
-        model: Modelo de PyTorch.
+        model: Modelo de PyTorch que acepta un único tensor de features.
         optimizer: Optimizador.
-        criterion: Función de pérdida.
+        criterion: Función de pérdida (se reutiliza también en validación,
+            comportamiento histórico).
         device: Dispositivo (cpu/cuda).
         scheduler: Learning rate scheduler (opcional).
         gradient_clip: Valor máximo de gradiente (0 = sin clip).
@@ -36,72 +39,29 @@ class Trainer:
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         gradient_clip: float = 0.0,
     ) -> None:
-        self.model = model.to(device)
-        self.optimizer = optimizer
-        self.criterion = criterion
-        self.device = device
-        self.scheduler = scheduler
-        self.gradient_clip = gradient_clip
+        super().__init__(
+            model=model,
+            optimizer=optimizer,
+            criterion=criterion,
+            device=device,
+            scheduler=scheduler,
+            gradient_clip=gradient_clip,
+            val_criterion=criterion,
+        )
 
-    def train_epoch(self, dataloader: DataLoader) -> float:
-        """Ejecuta una época de entrenamiento.
+    def _forward_batch(
+        self, batch: tuple[torch.Tensor, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, None]:
+        """Mueve un batch tabular al dispositivo y ejecuta el forward."""
+        features, targets = batch
+        features = features.to(self.device)
+        targets = targets.to(self.device)
+        predictions = self.model(features).squeeze(-1)
+        return predictions, targets, None
 
-        Args:
-            dataloader: DataLoader con datos de entrenamiento.
+    # Wrappers para preservar la API pública histórica (train_loader/val_loader).
 
-        Returns:
-            Pérdida promedio de la época.
-        """
-        self.model.train()
-        total_loss = 0.0
-        n_batches = 0
-
-        for features, targets in dataloader:
-            features = features.to(self.device)
-            targets = targets.to(self.device)
-
-            self.optimizer.zero_grad()
-            predictions = self.model(features).squeeze(-1)
-            loss = self.criterion(predictions, targets)
-            loss.backward()
-
-            if self.gradient_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.gradient_clip
-                )
-
-            self.optimizer.step()
-            total_loss += loss.item()
-            n_batches += 1
-
-        return total_loss / max(n_batches, 1)
-
-    @torch.no_grad()
-    def validate(self, dataloader: DataLoader) -> float:
-        """Ejecuta validación sin gradientes.
-
-        Args:
-            dataloader: DataLoader con datos de validación.
-
-        Returns:
-            Pérdida promedio de validación.
-        """
-        self.model.eval()
-        total_loss = 0.0
-        n_batches = 0
-
-        for features, targets in dataloader:
-            features = features.to(self.device)
-            targets = targets.to(self.device)
-
-            predictions = self.model(features).squeeze(-1)
-            loss = self.criterion(predictions, targets)
-            total_loss += loss.item()
-            n_batches += 1
-
-        return total_loss / max(n_batches, 1)
-
-    def fit(
+    def fit(  # type: ignore[override]
         self,
         train_loader: DataLoader,
         val_loader: DataLoader,
@@ -110,54 +70,18 @@ class Trainer:
         checkpoint_path: str | None = None,
         model_name: str | None = None,
     ) -> dict[str, list[float]]:
-        """Ejecuta el ciclo completo de entrenamiento con early stopping.
-
-        Args:
-            train_loader: DataLoader de entrenamiento.
-            val_loader: DataLoader de validación.
-            epochs: Número máximo de épocas.
-            patience: Épocas sin mejora antes de parar.
-            checkpoint_path: Ruta para guardar el mejor modelo (opcional).
-            model_name: Nombre lógico del modelo, persistido en el checkpoint
-                para validación de arquitectura al cargar.
-
-        Returns:
-            Diccionario con historial de pérdidas {'train_loss', 'val_loss'}.
-        """
-        early_stopping = EarlyStopping(patience=patience)
-        checkpoint = (
-            ModelCheckpoint(checkpoint_path, model_name=model_name)
-            if checkpoint_path else None
+        """Entrena el modelo con DataLoaders tabulares."""
+        return super().fit(
+            train_data=train_loader,
+            val_data=val_loader,
+            epochs=epochs,
+            patience=patience,
+            checkpoint_path=checkpoint_path,
+            model_name=model_name,
         )
 
-        history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
+    def train_epoch(self, dataloader: Iterable) -> float:  # type: ignore[override]
+        return super().train_epoch(dataloader)
 
-        for epoch in range(1, epochs + 1):
-            train_loss = self.train_epoch(train_loader)
-            val_loss = self.validate(val_loader)
-
-            if self.scheduler is not None:
-                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step(val_loss)
-                else:
-                    self.scheduler.step()
-
-            history["train_loss"].append(train_loss)
-            history["val_loss"].append(val_loss)
-
-            logger.info(
-                "Época %d/%d | Train Loss: %.4f | Val Loss: %.4f | LR: %.2e",
-                epoch, epochs, train_loss, val_loss,
-                self.optimizer.param_groups[0]["lr"],
-            )
-
-            # Guardar mejor modelo
-            if checkpoint is not None:
-                checkpoint.step(val_loss, self.model, self.optimizer, epoch)
-
-            # Early stopping
-            if early_stopping.step(val_loss):
-                logger.info("Early stopping en época %d", epoch)
-                break
-
-        return history
+    def validate(self, dataloader: Iterable) -> float:  # type: ignore[override]
+        return super().validate(dataloader)
