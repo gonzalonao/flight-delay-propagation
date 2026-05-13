@@ -163,8 +163,17 @@ def _build_history_lookups(
             sched_arr_grp["Distance"].mean().rename("sched_arr_mean_distance")
         )
     else:
-        # Serie vacía con el mismo MultiIndex → todos los lookups dan default.
-        sched_arr_mean_distance = pd.Series(dtype="float32", name="sched_arr_mean_distance")
+        # Serie vacía con el mismo MultiIndex que la rama "with Distance"
+        # (``["Dest", "arr_bucket"]``) → todos los lookups dan default vía
+        # KeyError sin tropezar con ``IndexingError`` por una sola
+        # dimensión. En producción el loader siempre incluye ``Distance``
+        # (cf. ``src/data/loader.py``), así que esta rama solo fija el
+        # comportamiento de los tests sintéticos sin ``Distance``.
+        sched_arr_mean_distance = pd.Series(
+            dtype="float32",
+            name="sched_arr_mean_distance",
+            index=pd.MultiIndex.from_tuples([], names=["Dest", "arr_bucket"]),
+        )
 
     # ── Class A: schedule (Origin, dep_bucket) ───────────────────────
     sched_dep_mask = df_arr["Origin"].isin(valid_airports)
