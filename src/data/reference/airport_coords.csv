@@ -1,0 +1,71 @@
+iata,name,latitude,longitude,elevation_m
+ATL,Hartsfield-Jackson Atlanta International,33.6407,-84.4277,313
+LAX,Los Angeles International,33.9425,-118.4081,38
+ORD,Chicago O'Hare International,41.9786,-87.9048,204
+DFW,Dallas/Fort Worth International,32.8998,-97.0403,184
+DEN,Denver International,39.8561,-104.6737,1655
+JFK,John F. Kennedy International,40.6413,-73.7781,4
+SFO,San Francisco International,37.6213,-122.3790,4
+SEA,Seattle-Tacoma International,47.4502,-122.3088,131
+LAS,Harry Reid International,36.0840,-115.1537,665
+MCO,Orlando International,28.4312,-81.3081,29
+EWR,Newark Liberty International,40.6895,-74.1745,5
+CLT,Charlotte Douglas International,35.2140,-80.9431,228
+PHX,Phoenix Sky Harbor International,33.4373,-112.0078,346
+MIA,Miami International,25.7959,-80.2870,3
+IAH,George Bush Intercontinental,29.9844,-95.3414,30
+BOS,Boston Logan International,42.3656,-71.0096,6
+MSP,Minneapolis-Saint Paul International,44.8848,-93.2223,256
+FLL,Fort Lauderdale-Hollywood International,26.0726,-80.1527,3
+DTW,Detroit Metropolitan,42.2162,-83.3554,197
+PHL,Philadelphia International,39.8744,-75.2424,11
+LGA,LaGuardia,40.7769,-73.8740,7
+BWI,Baltimore/Washington International Thurgood Marshall,39.1774,-76.6684,44
+DCA,Ronald Reagan Washington National,38.8512,-77.0402,4
+IAD,Washington Dulles International,38.9531,-77.4565,95
+MDW,Chicago Midway International,41.7868,-87.7522,189
+SLC,Salt Lake City International,40.7884,-111.9778,1288
+SAN,San Diego International,32.7338,-117.1933,5
+TPA,Tampa International,27.9755,-82.5332,8
+HNL,Daniel K. Inouye International,21.3187,-157.9224,4
+BNA,Nashville International,36.1245,-86.6782,183
+AUS,Austin-Bergstrom International,30.1975,-97.6664,150
+RDU,Raleigh-Durham International,35.8776,-78.7875,132
+MCI,Kansas City International,39.2976,-94.7139,313
+STL,St. Louis Lambert International,38.7487,-90.3700,184
+OAK,Oakland International,37.7126,-122.2197,2
+SJC,Norman Y. Mineta San Jose International,37.3639,-121.9289,18
+SMF,Sacramento International,38.6951,-121.5908,8
+SAT,San Antonio International,29.5337,-98.4698,247
+IND,Indianapolis International,39.7173,-86.2944,243
+PIT,Pittsburgh International,40.4915,-80.2329,367
+CMH,John Glenn Columbus International,39.9980,-82.8919,250
+MSY,Louis Armstrong New Orleans International,29.9934,-90.2580,1
+MKE,Milwaukee Mitchell International,42.9472,-87.8966,221
+JAX,Jacksonville International,30.4941,-81.6879,9
+RSW,Southwest Florida International,26.5362,-81.7552,9
+CLE,Cleveland Hopkins International,41.4117,-81.8498,241
+PDX,Portland International,45.5898,-122.5951,9
+ABQ,Albuquerque International Sunport,35.0402,-106.6090,1632
+BUR,Hollywood Burbank,34.2007,-118.3585,236
+ONT,Ontario International,34.0560,-117.6012,287
+SNA,John Wayne Airport,33.6757,-117.8682,17
+OKC,Will Rogers World,35.3931,-97.6007,395
+PVD,Theodore Francis Green State,41.7240,-71.4283,17
+BUF,Buffalo Niagara International,42.9405,-78.7322,222
+BHM,Birmingham-Shuttlesworth International,33.5629,-86.7535,197
+BDL,Bradley International,41.9389,-72.6833,53
+ORF,Norfolk International,36.8946,-76.2012,8
+RIC,Richmond International,37.5052,-77.3197,51
+MEM,Memphis International,35.0424,-89.9767,103
+OMA,Eppley Airfield,41.3032,-95.8941,300
+TUS,Tucson International,32.1161,-110.9410,808
+ELP,El Paso International,31.8067,-106.3779,1206
+ANC,Ted Stevens Anchorage International,61.1744,-149.9961,46
+ALB,Albany International,42.7483,-73.8017,87
+CHS,Charleston International,32.8986,-80.0405,14
+GRR,Gerald R. Ford International,42.8808,-85.5228,242
+GSO,Piedmont Triad International,36.0978,-79.9373,279
+GSP,Greenville-Spartanburg International,34.8957,-82.2189,295
+SDF,Louisville International,38.1744,-85.7361,151
+LIT,Bill and Hillary Clinton National,34.7294,-92.2243,80
