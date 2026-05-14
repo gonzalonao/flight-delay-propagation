@@ -186,13 +186,18 @@ if ($DryRun) {
 # -----------------------------------------------------------------------------
 function Invoke-PythonStep {
     param(
-        [string[]]$Args,
+        # NOTE: this parameter is intentionally NOT named "Args" — $Args is
+        # a reserved PowerShell automatic variable that always shadows any
+        # like-named parameter inside the function body, leading to
+        # silently-empty argument lists (Start-Process then rejects them
+        # with "Cannot validate argument on parameter 'ArgumentList'").
+        [string[]]$PyArgs,
         [string]$LogPath,
         [string]$StepName,
         [string]$RunLogPath
     )
 
-    Write-Log (">>> " + $StepName + " : " + $PythonExe + " " + ($Args -join ' ')) $RunLogPath
+    Write-Log (">>> " + $StepName + " : " + $PythonExe + " " + ($PyArgs -join ' ')) $RunLogPath
 
     $start = Get-Date
 
@@ -201,7 +206,7 @@ function Invoke-PythonStep {
     # exes wraps lines in NativeCommandError which corrupts $? on success).
     $errPath = $LogPath + ".err"
     $proc = Start-Process -FilePath $PythonExe `
-                          -ArgumentList $Args `
+                          -ArgumentList $PyArgs `
                           -NoNewWindow `
                           -PassThru `
                           -RedirectStandardOutput $LogPath `
@@ -267,7 +272,7 @@ foreach ($run in $Runs) {
     try {
         # --- Train ---
         $trainResult = Invoke-PythonStep `
-            -Args @("scripts\train.py", "--config", $configRel) `
+            -PyArgs @("scripts\train.py", "--config", $configRel) `
             -LogPath $trainLog `
             -StepName "train" `
             -RunLogPath $RunLogPath
@@ -294,7 +299,7 @@ foreach ($run in $Runs) {
 
         # --- Evaluate ---
         $evalResult = Invoke-PythonStep `
-            -Args @("scripts\evaluate.py", "--checkpoint", $ckptDst, "--config", $configRel) `
+            -PyArgs @("scripts\evaluate.py", "--checkpoint", $ckptDst, "--config", $configRel) `
             -LogPath $evalLog `
             -StepName "evaluate" `
             -RunLogPath $RunLogPath
