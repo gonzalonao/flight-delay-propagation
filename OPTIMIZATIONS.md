@@ -31,6 +31,18 @@
 - [x] scheduled_mean_distance_in per horizon  // applied in commit E (bloque G, col_offset+3)
 - [x] hour-of-day at target window cyclic encoding per horizon  // applied in commit E (col_offset+4, solo sin para no inflar)
 
+## Weather features (exogenous, ERA5 reanalysis via Open-Meteo) — bloque H, opcional
+> Activación global: ``weather.enabled: true`` en el config. Cada grupo se
+> puede apagar individualmente vía ``weather.params``. La caché en disco
+> (``data/processed/weather/open_meteo/``) evita golpear la red entre runs.
+- [ ] Activate weather block entirely (`weather.enabled: true`)  // bumps feature dim 55 → 109 with H=5
+- [ ] Wind block: mean wind + max gust (`weather.params: [wind]`)  // bloque H, cols 0–1 (hist) y 0–1 (fut)
+- [ ] Precip + cloud block (`weather.params: [precip_cloud]`)  // bloque H, cols 2–3
+- [ ] Weather category one-hot (`weather.params: [category]`)  // bloque H, cols 4–8 (clear/fog/rain/snow/thunder)
+- [ ] Future-window weather as "perfect-forecast proxy" (observation at T+h)  // baseline currently — switch later to noisy forecast for realism
+- [ ] Historical-only weather (drop future block)  // conservative leakage stance for sensitivity check
+- [ ] Swap Open-Meteo → Iowa State ASOS/METAR  // higher fidelity, requires `metar` parser; future ablation
+
 ## Edge features (replace single static weight)
 - [x] flight_count_norm (current weight, retained)  // applied in commit F (col 0 estática)
 - [x] mean_air_time_norm  // applied in commit F (col 1 estática)
@@ -89,8 +101,10 @@
 ## Suggested ablation order (when accuracy underwhelms)
 1. Toggle target ArrDelay vs DepDelay — biggest expected effect on baseline-vs-GNN gap
 2. Toggle exogenous future features as a group — biggest expected effect on h=6/h=8 horizons
-3. Toggle BTS cause columns + lags — affects all horizons
-4. Toggle Seq2SeqGNN redesign as a whole vs old architecture (same features)
-5. Toggle edge features (GATv2 with edge_dim vs without) — affects GAT/Seq2Seq only
-6. Toggle multi-task auxiliary DepDelay head — small regularization effect
-7. Toggle Huber vs MSE loss — small, helps tail
+3. **Toggle weather block (H) as a group** — expected high impact on h=4/6/8; thunderstorms drive NAS holds
+4. Toggle BTS cause columns + lags — affects all horizons
+5. Toggle Seq2SeqGNN redesign as a whole vs old architecture (same features)
+6. Toggle edge features (GATv2 with edge_dim vs without) — affects GAT/Seq2Seq only
+7. Toggle weather sub-groups individually (wind / precip_cloud / category) — finer attribution within block H
+8. Toggle multi-task auxiliary DepDelay head — small regularization effect
+9. Toggle Huber vs MSE loss — small, helps tail
