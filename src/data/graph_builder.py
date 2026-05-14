@@ -25,9 +25,10 @@ explícitamente por hora de llegada (`arr_timestamp`) para que la
 ventana histórica se cierre estrictamente antes de T.
 """
 
+import datetime as dt
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,11 @@ import pandas as pd
 import torch
 from torch_geometric.data import Data
 
+from src.data.weather import (
+    NUM_WEATHER_CATEGORIES,
+    WEATHER_SCHEMA_VERSION,
+    load_weather_for_airports,
+)
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -51,6 +57,13 @@ BTS_CAUSE_COLUMNS = (
 # Lags (en pasos de `window_delta`) usados como features históricas.
 ARR_DELAY_LAGS = (1, 3, 6, 24)
 ROLLING_WINDOW_HOURS = 6
+
+# Tamaño del bloque H (meteorología) cuando ``weather_lookups`` está
+# activado. Histórico = mean wind + max gust + sum precip + mean cloud
+# + 5 one-hots de categoría dominante; futuro idéntico por horizonte.
+# Mantenerlos iguales hace que la cuenta total sea ``9 + 9 * H``.
+WEATHER_BLOCK_HIST_SIZE = 4 + NUM_WEATHER_CATEGORIES   # = 9
+WEATHER_BLOCK_FUTURE_SIZE_PER_H = 4 + NUM_WEATHER_CATEGORIES  # = 9
 
 
 @dataclass
@@ -79,6 +92,199 @@ class HistoryLookups:
     # Por arista (Origin, Dest, bucket):
     route_recent_arr_delay: pd.Series     # rolling 6h de ArrDelay por ruta (Class B)
     route_sched_count: pd.Series          # nº vuelos programados por ruta y dep_bucket (Class A)
+
+
+@dataclass
+class WeatherLookups:
+    """Estructura precomputada para acceso O(1) a observaciones horarias.
+
+    ``airport_weather`` mapea IATA → DataFrame indexado por
+    ``timestamp`` (horario, redondeado al inicio de la hora) con columnas:
+    ``wind_speed_10m``, ``wind_gusts_10m``, ``precipitation``,
+    ``cloud_cover``, ``weather_category``. Los aeropuertos sin datos
+    (sea por error de red o porque su IATA no figura en el CSV de
+    coordenadas) NO aparecen en el dict — los consumidores devuelven el
+    vector cero al fallar el lookup, lo que el modelo interpreta como
+    "sin señal meteorológica" (equivalente a la rama ``weather_lookups
+    is None`` para ese aeropuerto en concreto).
+
+    Attributes:
+        airport_weather: Dict IATA → DataFrame horario.
+        enabled_params: Conjunto de claves activas {"wind", "precip_cloud",
+            "category"}. Permite encender/apagar grupos individuales sin
+            reconstruir la caché HTTP — los grupos apagados se sobreescriben
+            con 0 en ``compute_node_features_rich``. Esto da soporte directo
+            a los toggles de OPTIMIZATIONS.md.
+    """
+
+    airport_weather: dict[str, pd.DataFrame] = field(default_factory=dict)
+    enabled_params: frozenset[str] = field(
+        default_factory=lambda: frozenset({"wind", "precip_cloud", "category"})
+    )
+
+    def empty(self) -> bool:
+        return not self.airport_weather
+
+
+def _weather_window_agg(
+    weather: WeatherLookups,
+    iata: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> np.ndarray:
+    """Agrega observaciones horarias en ``[start, end)`` para un IATA.
+
+    Devuelve un vector denso de ``WEATHER_BLOCK_HIST_SIZE`` floats:
+
+      [0]      mean(wind_speed_10m) en km/h
+      [1]      max(wind_gusts_10m) en km/h
+      [2]      sum(precipitation) en mm
+      [3]      mean(cloud_cover) en %
+      [4..8]   one-hot de la categoría DOMINANTE (moda) en la ventana
+
+    Las columnas correspondientes a grupos desactivados (``enabled_params``)
+    se ponen a 0 — toggle a nivel de feature group para ablaciones.
+    """
+    out = np.zeros(WEATHER_BLOCK_HIST_SIZE, dtype=np.float32)
+    df = weather.airport_weather.get(iata)
+    if df is None or df.empty:
+        return out
+
+    mask = (df.index >= start) & (df.index < end)
+    window = df.loc[mask]
+    if window.empty:
+        return out
+
+    if "wind" in weather.enabled_params:
+        wind = window["wind_speed_10m"].to_numpy(dtype="float32")
+        gust = window["wind_gusts_10m"].to_numpy(dtype="float32")
+        wind_valid = wind[~np.isnan(wind)]
+        gust_valid = gust[~np.isnan(gust)]
+        if wind_valid.size > 0:
+            out[0] = float(np.mean(wind_valid))
+        if gust_valid.size > 0:
+            out[1] = float(np.max(gust_valid))
+
+    if "precip_cloud" in weather.enabled_params:
+        precip = window["precipitation"].to_numpy(dtype="float32")
+        cloud = window["cloud_cover"].to_numpy(dtype="float32")
+        precip_valid = precip[~np.isnan(precip)]
+        cloud_valid = cloud[~np.isnan(cloud)]
+        if precip_valid.size > 0:
+            out[2] = float(np.sum(precip_valid))
+        if cloud_valid.size > 0:
+            out[3] = float(np.mean(cloud_valid))
+
+    if "category" in weather.enabled_params:
+        cats = window["weather_category"].to_numpy(dtype="int8")
+        if cats.size > 0:
+            # Moda: argmax sobre el histograma. ``np.bincount`` con
+            # ``minlength`` garantiza un slot por categoría aunque la
+            # ventana no contenga todas.
+            hist = np.bincount(cats, minlength=NUM_WEATHER_CATEGORIES)
+            dominant = int(np.argmax(hist))
+            out[4 + dominant] = 1.0
+
+    return out
+
+
+def _weather_point_obs(
+    weather: WeatherLookups,
+    iata: str,
+    timestamp: pd.Timestamp,
+) -> np.ndarray:
+    """Lookup horario alineado a la hora de ``timestamp``.
+
+    Devuelve un vector denso de ``WEATHER_BLOCK_FUTURE_SIZE_PER_H`` floats
+    con el mismo esquema que :func:`_weather_window_agg` excepto que las
+    columnas 0..3 son la observación puntual (no agregada) y 4..8 es el
+    one-hot de la categoría observada en esa hora exacta.
+
+    Justificación de leakage: el target en T+h es el delay observado,
+    no la meteorología; el feature es exógeno. Usamos la observación en
+    T+h como "perfect-forecast proxy" — sobrestima la utilidad real (un
+    sistema de producción usaría una previsión con error), pero ese gap
+    se aborda en una ablación futura (OPTIMIZATIONS.md).
+    """
+    out = np.zeros(WEATHER_BLOCK_FUTURE_SIZE_PER_H, dtype=np.float32)
+    df = weather.airport_weather.get(iata)
+    if df is None or df.empty:
+        return out
+
+    hour = timestamp.floor("h")
+    if hour not in df.index:
+        return out
+    row = df.loc[hour]
+    if isinstance(row, pd.DataFrame):
+        # Lookup que coincidió con varios timestamps (no debería pasar con
+        # el floor("h") pero por defensiva nos quedamos con el primero).
+        row = row.iloc[0]
+
+    if "wind" in weather.enabled_params:
+        wind_v = row.get("wind_speed_10m", np.nan)
+        gust_v = row.get("wind_gusts_10m", np.nan)
+        if not pd.isna(wind_v):
+            out[0] = float(wind_v)
+        if not pd.isna(gust_v):
+            out[1] = float(gust_v)
+
+    if "precip_cloud" in weather.enabled_params:
+        precip_v = row.get("precipitation", np.nan)
+        cloud_v = row.get("cloud_cover", np.nan)
+        if not pd.isna(precip_v):
+            out[2] = float(precip_v)
+        if not pd.isna(cloud_v):
+            out[3] = float(cloud_v)
+
+    if "category" in weather.enabled_params:
+        cat = row.get("weather_category", 0)
+        if not pd.isna(cat):
+            cat_idx = int(cat)
+            if 0 <= cat_idx < NUM_WEATHER_CATEGORIES:
+                out[4 + cat_idx] = 1.0
+
+    return out
+
+
+def _build_weather_lookups(
+    weather_df: pd.DataFrame | None,
+    airports: list[str] | None = None,
+    enabled_params: frozenset[str] | None = None,
+) -> WeatherLookups | None:
+    """Construye ``WeatherLookups`` a partir del DataFrame multi-aeropuerto.
+
+    Si ``weather_df`` es ``None`` o vacío, devuelve ``None`` (lo que
+    desactiva el bloque H aguas abajo, manteniendo el contrato anterior
+    de feature dim).
+
+    El DataFrame de entrada tiene MultiIndex ``(iata, timestamp)`` —
+    la salida es un dict ``{iata: df_indexado_por_timestamp}`` con
+    ``timestamp`` redondeado a la hora (``floor("h")``) para que el
+    lookup ``_weather_point_obs`` cierre por hora exacta. Hashable
+    keys habilitan O(1) por airport.
+    """
+    if weather_df is None or weather_df.empty:
+        return None
+
+    if enabled_params is None:
+        enabled_params = frozenset({"wind", "precip_cloud", "category"})
+
+    airport_weather: dict[str, pd.DataFrame] = {}
+    target_airports = set(airports) if airports is not None else None
+
+    for iata, group in weather_df.groupby(level="iata"):
+        if target_airports is not None and iata not in target_airports:
+            continue
+        per_airport = group.droplevel("iata").copy()
+        per_airport.index = per_airport.index.floor("h")
+        # Eliminar duplicados manteniendo el primer valor por hora.
+        per_airport = per_airport[~per_airport.index.duplicated(keep="first")]
+        airport_weather[iata] = per_airport
+
+    return WeatherLookups(
+        airport_weather=airport_weather,
+        enabled_params=enabled_params,
+    )
 
 
 def _build_history_lookups(
@@ -512,11 +718,13 @@ def compute_node_features_rich(
     prediction_horizons: list[int],
     history_lookups: HistoryLookups,
     delay_threshold: float = 15.0,
+    weather_lookups: WeatherLookups | None = None,
 ) -> torch.Tensor:
     """Versión enriquecida de ``compute_node_features``.
 
     Devuelve un vector denso por nodo organizado en bloques con tamaños
-    fijos (la dimensión total depende de ``len(prediction_horizons)``):
+    fijos (la dimensión total depende de ``len(prediction_horizons)`` y
+    de si la meteorología está activa):
 
       Bloque                                      | tamaño
       --------------------------------------------|-------
@@ -527,8 +735,15 @@ def compute_node_features_rich(
       E) Rolling 6h mean+std (Class B, lookup)    | 2
       F) Calendario cíclico de la ventana actual  | 6
       G) Exógenas futuras por horizonte (Class A) | 5 × len(horizons)
+      H) Meteorología (opcional)                  | 9 + 9 × len(horizons)
+         si ``weather_lookups is not None``       |
 
-    Para 5 horizontes da 9+4+5+4+2+6+25 = 55 features por nodo.
+    Para 5 horizontes sin meteorología → 55 features por nodo. Con
+    meteorología activa → 55 + 9 + 9·5 = 109 features. Si se desactiva
+    el bloque H queda omitido y el feature dim vuelve al valor anterior
+    sin romper modelos ya entrenados (la primera capa de cada modelo
+    se construye via factory con ``input_dim`` derivado del primer
+    snapshot).
 
     Args:
         window_df: vuelos completados en la ventana de input
@@ -540,11 +755,16 @@ def compute_node_features_rich(
         prediction_horizons: horizontes futuros (e.g. [1,2,4,6,8]).
         history_lookups: estructuras precomputadas.
         delay_threshold: umbral en min para % delayed.
+        weather_lookups: estructura precomputada de meteorología. ``None``
+            desactiva el bloque H (default — preserva el contrato
+            histórico).
     """
     num_nodes = len(airport_map)
     n_lags = len(ARR_DELAY_LAGS)
     n_horizons = len(prediction_horizons)
     feat_dim = 9 + 4 + 5 + n_lags + 2 + 6 + 5 * n_horizons
+    if weather_lookups is not None:
+        feat_dim += WEATHER_BLOCK_HIST_SIZE + WEATHER_BLOCK_FUTURE_SIZE_PER_H * n_horizons
     features = torch.zeros(num_nodes, feat_dim, dtype=torch.float32)
 
     # Class B (post-hoc) features solo pueden derivarse de vuelos cuyo
@@ -698,6 +918,32 @@ def compute_node_features_rich(
         target_center_hour = (h_start + window_delta / 2).hour
         h_sin_target, _ = _cyclic_encode(target_center_hour, 24)
         features[:, col_offset + 4] = h_sin_target
+
+    # ── H. Meteorología (opcional, exógena) ──────────────────────────
+    # H1: agregados sobre la ventana de input [current_end - W, current_end).
+    # H2: observación puntual a T + (h - 0.5)·W por horizonte (centro de
+    #     la ventana objetivo) — "perfect-forecast proxy". El target del
+    #     modelo es el delay en T+h, no el tiempo; la meteorología es
+    #     exógena y NO viola la invariante de leakage.
+    if weather_lookups is not None and not weather_lookups.empty():
+        base_col += 5 * n_horizons  # saltamos el bloque G ya escrito
+        hist_start = current_end - window_delta
+        hist_end = current_end
+        for airport, i in airport_map.items():
+            agg = _weather_window_agg(weather_lookups, airport, hist_start, hist_end)
+            features[i, base_col : base_col + WEATHER_BLOCK_HIST_SIZE] = (
+                torch.from_numpy(agg)
+            )
+
+        fut_base = base_col + WEATHER_BLOCK_HIST_SIZE
+        for h_idx, h in enumerate(prediction_horizons):
+            h_center = current_end + (h - 1) * window_delta + window_delta / 2
+            col_offset = fut_base + WEATHER_BLOCK_FUTURE_SIZE_PER_H * h_idx
+            for airport, i in airport_map.items():
+                obs = _weather_point_obs(weather_lookups, airport, h_center)
+                features[i, col_offset : col_offset + WEATHER_BLOCK_FUTURE_SIZE_PER_H] = (
+                    torch.from_numpy(obs)
+                )
 
     # ── normalización final: clip + nan→0 ────────────────────────────
     return torch.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
@@ -874,6 +1120,7 @@ def create_temporal_graphs(
     window_hours: int = 1,
     delay_threshold: float = 15.0,
     prediction_horizons: list[int] | None = None,
+    weather_lookups: WeatherLookups | None = None,
 ) -> list[Data]:
     """Crea snapshots de grafos temporales a partir de datos de vuelos.
 
@@ -1006,6 +1253,7 @@ def create_temporal_graphs(
             prediction_horizons=horizons_for_features,
             history_lookups=history_lookups,
             delay_threshold=delay_threshold,
+            weather_lookups=weather_lookups,
         )
 
         # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
@@ -1102,7 +1350,77 @@ def normalize_graph_features(
 # cachés en disco que asuman el esquema anterior.
 #   v2 → v3 (W2 multi-task): los targets multi-horizonte pasan de
 #         ``[N, H]`` a ``[N, H, 3]`` (canales arr_delay/dep_delay/pct_15).
-GRAPH_SCHEMA_VERSION = 3
+#   v3 → v4 (Weather): se añade el bloque H opcional con 9 + 9·H features
+#         meteorológicas (ver ``WEATHER_BLOCK_*``). Con ``weather.enabled
+#         = false`` el feature dim NO cambia, pero el hash de cache incluye
+#         el flag para que distintos toggles no se pisen.
+GRAPH_SCHEMA_VERSION = 4
+
+
+# Mapeo de grupos legibles (en config.weather.params) a las claves
+# internas que reconoce ``WeatherLookups.enabled_params``. Mantener
+# sincronizado con el bloque ``weather:`` de configs/default.yaml.
+_WEATHER_PARAM_ALIASES = {
+    "wind": "wind",
+    "wind_gust": "wind",          # alias retro-compatible
+    "precip": "precip_cloud",
+    "precip_cloud": "precip_cloud",
+    "cloud": "precip_cloud",
+    "category": "category",
+    "weather_code": "category",
+}
+
+
+def _load_weather_lookups_from_config(
+    df: pd.DataFrame,
+    airports: list[str],
+    config: dict,
+) -> WeatherLookups | None:
+    """Lee config.weather y construye ``WeatherLookups`` si está activo.
+
+    Pasos:
+      1. Si ``weather.enabled`` es ``False`` (default) → ``None``.
+      2. Resuelve el rango temporal de ``df`` (fechas mínima y máxima de
+         ``FlightDate``). Open-Meteo es inclusivo en ``end_date`` → no
+         hace falta sumar un día.
+      3. Llama a ``load_weather_for_airports`` con el cache_dir
+         configurado (``weather.cache_dir`` o default
+         ``data/processed/weather``).
+      4. Construye ``WeatherLookups`` con los grupos de params activos.
+    """
+    weather_config = (config.get("weather") or {})
+    if not weather_config.get("enabled", False):
+        return None
+
+    flight_dates = pd.to_datetime(df["FlightDate"])
+    start_date = flight_dates.min().date()
+    # Ampliamos un día por seguridad: las observaciones a T+h del último
+    # snapshot pueden caer en el día posterior si current_end es noche.
+    end_date = flight_dates.max().date() + dt.timedelta(days=1)
+
+    cache_dir_raw = weather_config.get("cache_dir") or "data/processed/weather"
+    cache_dir = Path(cache_dir_raw)
+
+    raw_params = weather_config.get("params") or [
+        "wind", "precip_cloud", "category",
+    ]
+    enabled_params = frozenset(
+        _WEATHER_PARAM_ALIASES.get(p, p) for p in raw_params
+    )
+
+    logger.info(
+        "Meteorología activada (provider=%s, params=%s, %s..%s).",
+        weather_config.get("provider", "open_meteo"),
+        sorted(enabled_params), start_date, end_date,
+    )
+
+    weather_df = load_weather_for_airports(
+        airports, start_date, end_date, cache_dir=cache_dir,
+    )
+
+    return _build_weather_lookups(
+        weather_df, airports=airports, enabled_params=enabled_params,
+    )
 
 
 def _snapshot_cache_key(
@@ -1119,6 +1437,7 @@ def _snapshot_cache_key(
     """
     graph_config = config.get("graph", {}) or {}
     eval_config = config.get("evaluation", {}) or {}
+    weather_config = config.get("weather", {}) or {}
 
     relevant_graph = {
         k: graph_config.get(k)
@@ -1130,6 +1449,15 @@ def _snapshot_cache_key(
         )
     }
     relevant_eval = {"delay_threshold_minutes": eval_config.get("delay_threshold_minutes")}
+    # Subset estable de config.weather que afecta al tensor de features.
+    # ``provider`` se incluye para que un futuro switch a ASOS no reuse
+    # un caché generado con Open-Meteo.
+    relevant_weather = {
+        "enabled": bool(weather_config.get("enabled", False)),
+        "provider": weather_config.get("provider", "open_meteo"),
+        "params": sorted(weather_config.get("params", []) or []),
+        "schema": WEATHER_SCHEMA_VERSION,
+    }
 
     flight_dates = pd.to_datetime(df["FlightDate"])
     df_signature = {
@@ -1143,6 +1471,7 @@ def _snapshot_cache_key(
         "schema": GRAPH_SCHEMA_VERSION,
         "graph": relevant_graph,
         "eval": relevant_eval,
+        "weather": relevant_weather,
         "airports": sorted(airports),
         "df": df_signature,
     }
@@ -1211,6 +1540,15 @@ def build_graph_dataset(
 
     prediction_horizons = graph_config.get("prediction_horizons")
 
+    # ── Meteorología (bloque H opcional) ─────────────────────────────
+    # Solo se activa si ``config.weather.enabled = true``. Si la red
+    # falla, ``load_weather_for_airports`` devuelve DataFrame vacío y
+    # ``_build_weather_lookups`` traduce a ``WeatherLookups`` vacío →
+    # el feature block H se llena con 0 sin romper el entrenamiento.
+    weather_lookups = _load_weather_lookups_from_config(
+        df, airports, config,
+    )
+
     graphs = create_temporal_graphs(
         df=df,
         airport_map=airport_map,
@@ -1220,6 +1558,7 @@ def build_graph_dataset(
         window_hours=window_hours,
         delay_threshold=delay_threshold,
         prediction_horizons=prediction_horizons,
+        weather_lookups=weather_lookups,
     )
 
     # Normalizar features usando solo estadísticas de entrenamiento
