@@ -21,8 +21,30 @@ All 6 share:
 
 ## Before you leave
 
+0. **(Optional but recommended) Set the Open-Meteo proxy pool** to avoid HTTP 429 rate-limits on the first run's weather fetch:
+
+   ```powershell
+   # URL form (auto-downloads the 100 proxies once per process)
+   $env:OPEN_METEO_PROXY_URL = "https://proxy.webshare.io/api/v2/proxy/list/download/uxdhgcxzvygowuzjfvdbqfykaqvlvvzvnqebzeak/-/any/username/direct/-/?plan_id=13252006"
+
+   # OR file form (offline-friendly)
+   $env:OPEN_METEO_PROXY_FILE = "C:\Users\gonza\Downloads\Webshare 100 proxies.txt"
+   ```
+
+   With either variable set, `src/data/weather.py` first tries a direct request; on `URLError`/`HTTPError` (e.g. 429) it rotates through up to 5 proxies from the pool with a 0.5–1 s jittered backoff. Without these vars, behavior is unchanged (direct only, no retry). The Webshare format is `host:port:user:pass` — one proxy per line.
+
+   > Once the weather cache (`data/processed/weather/open_meteo/*.parquet`) is fully populated, proxies stop being touched on subsequent runs — the cache short-circuits the HTTP call.
+
 1. **Activate the venv** in the same PowerShell window you'll launch from (otherwise `python` won't resolve to the project Python).
-2. **Smoke-run** with a 1-epoch override. Create `configs/local.yaml` (gitignored — `load_config` merges it as the final override layer) containing:
+2. **(Optional) Pre-warm the weather cache** in a 30-second sanity check before the smoke-run. With the proxy env var set:
+
+   ```powershell
+   python -c "import datetime as dt; from src.data.weather import load_weather_for_airports, load_airport_coords; load_weather_for_airports(list(load_airport_coords().keys()), dt.date(2018,1,1), dt.date(2020,1,1), cache_dir='data/processed/weather')"
+   ```
+
+   This fetches all 79 airports up-front, surfacing proxy-pool issues now rather than 4 h into the run. Successful runs print `Meteorología cargada: <N> aeropuertos × ...`. If you see `Proxy pool listo: 100 proxies disponibles.` followed by `Open-Meteo OK vía proxy en intento N`, the pool is working.
+
+3. **Smoke-run** with a 1-epoch override. Create `configs/local.yaml` (gitignored — `load_config` merges it as the final override layer) containing:
    ```yaml
    training:
      epochs: 1
@@ -34,7 +56,7 @@ All 6 share:
    ```
    This validates that weather download/cache, snapshot-cache rebuild with `temporal_window_hours=1`, checkpoint write, and overall pipeline work end-to-end. **Delete `configs/local.yaml` afterwards** or your weekend run will only do 1 epoch.
 
-3. **Verify hibernation is enabled** (Administrator PowerShell, one-time):
+4. **Verify hibernation is enabled** (Administrator PowerShell, one-time):
    ```powershell
    powercfg /a
    ```
@@ -43,7 +65,7 @@ All 6 share:
    powercfg /h on
    ```
 
-4. **Dry-run** to confirm the script parses and the run directory is writable:
+5. **Dry-run** to confirm the script parses and the run directory is writable:
    ```powershell
    .\scripts\run_weekend.ps1 -DryRun
    ```
@@ -55,7 +77,7 @@ All 6 share:
    > ```
    > Use the same `powershell.exe -ExecutionPolicy Bypass -File ...` pattern for the real run too. (Or, one-time per user: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and answer Yes.)
 
-5. **Launch the real run**:
+6. **Launch the real run**:
    ```powershell
    powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_weekend.ps1
    ```

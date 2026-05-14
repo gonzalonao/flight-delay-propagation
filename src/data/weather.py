@@ -48,6 +48,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import random
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -60,6 +63,102 @@ import pandas as pd
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Proxy pool (opcional, para sortear rate-limits 429 de Open-Meteo).
+#
+# Activación: definir una de estas dos variables de entorno
+#
+#   OPEN_METEO_PROXY_URL   URL al endpoint de Webshare (u otro provider)
+#                          que devuelve la lista de proxies en formato
+#                          "host:port:user:pass" — una línea por proxy.
+#   OPEN_METEO_PROXY_FILE  Ruta local a un .txt con el mismo formato.
+#
+# Si ambas están definidas, OPEN_METEO_PROXY_URL gana. El pool se carga
+# una sola vez (lazy + memoized) en la primera llamada que lo necesite.
+# Si no está definida ninguna, el módulo se comporta como antes (HTTP
+# directo, sin retries) y los tests siguen pasando sin cambios.
+# ---------------------------------------------------------------------------
+
+# Máximo de proxies a probar tras un 429/URLError antes de rendirse.
+# 5 es suficiente: en el plan gratuito de Webshare los proxies rotan IP
+# por petición, y los 100 proxies entregados raramente caen en bloque.
+_MAX_PROXY_RETRIES = 5
+
+_PROXY_POOL: list[str] | None = None
+_PROXY_POOL_LOADED = False
+
+
+def _load_proxy_pool() -> list[str]:
+    """Devuelve la lista de proxies (lazy + memoized).
+
+    Lee ``OPEN_METEO_PROXY_URL`` o ``OPEN_METEO_PROXY_FILE``. Cada línea
+    válida debe ser ``host:port:user:pass`` (auth básica) o ``host:port``
+    (sin auth). El resultado se baraja una vez para no martillear siempre
+    al primer proxy.
+    """
+    global _PROXY_POOL, _PROXY_POOL_LOADED
+    if _PROXY_POOL_LOADED:
+        return _PROXY_POOL or []
+    _PROXY_POOL_LOADED = True
+
+    url = os.environ.get("OPEN_METEO_PROXY_URL")
+    path = os.environ.get("OPEN_METEO_PROXY_FILE")
+    text: str | None = None
+
+    if url:
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "flight-delay-prop/0.1"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as response:
+                text = response.read().decode("utf-8")
+            logger.info("Proxy pool descargado desde OPEN_METEO_PROXY_URL.")
+        except Exception as exc:  # pragma: no cover - depende de la red
+            logger.warning(
+                "OPEN_METEO_PROXY_URL definido pero la descarga falló: %s. "
+                "Continúo sin proxies (peticiones directas).", exc,
+            )
+    elif path:
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            logger.info("Proxy pool cargado desde OPEN_METEO_PROXY_FILE: %s", path)
+        except Exception as exc:  # pragma: no cover - depende del FS
+            logger.warning(
+                "OPEN_METEO_PROXY_FILE definido (%s) pero la lectura falló: %s. "
+                "Continúo sin proxies.", path, exc,
+            )
+
+    if not text:
+        _PROXY_POOL = []
+        return _PROXY_POOL
+
+    pool: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4:
+            host, port, user, pwd = parts
+            pool.append(f"http://{user}:{pwd}@{host}:{port}")
+        elif len(parts) == 2:
+            host, port = parts
+            pool.append(f"http://{host}:{port}")
+        # Otros formatos se ignoran silenciosamente (líneas comentadas,
+        # cabeceras, etc.).
+
+    random.shuffle(pool)
+    _PROXY_POOL = pool
+    if pool:
+        logger.info("Proxy pool listo: %d proxies disponibles.", len(pool))
+    else:
+        logger.warning(
+            "Proxy pool vacío tras parsear (¿formato incorrecto? Se esperaba "
+            "host:port:user:pass por línea)."
+        )
+    return pool
 
 
 # Ruta por defecto al CSV de coordenadas (versionado con el código,
@@ -198,11 +297,21 @@ def _open_meteo_request_url(
     return f"{OPEN_METEO_ARCHIVE_URL}?{qs}"
 
 
-def _fetch_json(url: str, timeout: float = 30.0) -> dict:
-    """HTTP GET con stdlib (sin nueva dependencia). Levanta ``HTTPError``."""
+def _fetch_json(url: str, timeout: float = 30.0, *, proxy: str | None = None) -> dict:
+    """HTTP GET con stdlib (sin nueva dependencia). Levanta ``HTTPError``.
+
+    Si se pasa ``proxy`` (formato ``http://user:pass@host:port``), la
+    petición se enruta por ese proxy en lugar de salir directa.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "flight-delay-prop/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        body = response.read()
+    if proxy:
+        handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        opener = urllib.request.build_opener(handler)
+        with opener.open(req, timeout=timeout) as response:
+            body = response.read()
+    else:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            body = response.read()
     return json.loads(body.decode("utf-8"))
 
 
@@ -295,13 +404,56 @@ def fetch_open_meteo(
             )
 
     url = _open_meteo_request_url(latitude, longitude, start_date, end_date)
-    try:
-        payload = _http_fetcher(url, timeout=timeout)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+
+    # Lista de proxies a probar: primero salida directa (None), después
+    # hasta _MAX_PROXY_RETRIES proxies del pool. Si no hay pool (env vars
+    # sin definir, o tests con _http_fetcher inyectado que no soporta
+    # proxies), sólo se intenta la salida directa — comportamiento idéntico
+    # al original.
+    using_default_fetcher = _http_fetcher is _fetch_json
+    proxies_to_try: list[str | None] = [None]
+    if using_default_fetcher:
+        pool = _load_proxy_pool()
+        if pool:
+            # Escogemos una sub-muestra distinta en cada llamada para
+            # repartir carga entre los 100 proxies sin recordar estado.
+            proxies_to_try.extend(random.sample(pool, k=min(_MAX_PROXY_RETRIES, len(pool))))
+
+    payload: dict | None = None
+    last_exc: Exception | None = None
+    for attempt_idx, proxy in enumerate(proxies_to_try):
+        if attempt_idx > 0:
+            # Backoff suave (0.5–1.0 s) antes de cada reintento, evita
+            # martillear al servidor incluso a través de proxies.
+            time.sleep(0.5 + random.random() * 0.5)
+        try:
+            if using_default_fetcher:
+                payload = _fetch_json(url, timeout=timeout, proxy=proxy)
+            else:
+                # Tests inyectan un fetcher con firma antigua (sin proxy).
+                payload = _http_fetcher(url, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_exc = exc
+            if proxy is None and len(proxies_to_try) > 1:
+                logger.warning(
+                    "Open-Meteo directo falló (lat=%.4f, lon=%.4f): %s. "
+                    "Reintentando vía proxy pool (%d disponibles).",
+                    latitude, longitude, exc, len(proxies_to_try) - 1,
+                )
+            continue
+        else:
+            if proxy is not None:
+                logger.info(
+                    "Open-Meteo OK vía proxy en intento %d (lat=%.4f, lon=%.4f).",
+                    attempt_idx + 1, latitude, longitude,
+                )
+            break
+
+    if payload is None:
         logger.warning(
-            "Open-Meteo falló (lat=%.4f, lon=%.4f, %s..%s): %s. "
+            "Open-Meteo falló tras %d intento(s) (lat=%.4f, lon=%.4f, %s..%s): %s. "
             "Devolviendo DataFrame vacío; el builder rellenará con 0.",
-            latitude, longitude, start_date, end_date, exc,
+            len(proxies_to_try), latitude, longitude, start_date, end_date, last_exc,
         )
         return _parse_open_meteo_response({})
 
