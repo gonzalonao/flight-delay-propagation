@@ -80,6 +80,39 @@ graph:
   prediction_horizons: [1, 2, 4, 6, 8]  # Horas futuras (h=4/6/8 son los objetivos de negocio)
   cache_dir: data/processed/snapshots   # Caché de snapshots; null para desactivar
 
+# =============================================================================
+# Meteorología (bloque H de features de nodo, opcional)
+# =============================================================================
+# Cuando ``enabled: true`` el builder llama a Open-Meteo Historical (ERA5)
+# para cada aeropuerto en ``airports`` y añade 9 + 9·len(prediction_horizons)
+# features por nodo:
+#   Histórico (sobre la ventana de input):
+#     mean wind_speed_10m, max wind_gusts_10m, sum precipitation,
+#     mean cloud_cover, one-hot de la categoría WMO dominante (5 clases).
+#   Futuro (por horizonte, observación a T + (h-0.5)·W):
+#     wind_speed, gust, precip, cloud, one-hot de la categoría observada.
+#
+# Coordenadas: ``src/data/reference/airport_coords.csv`` (top-70 EE.UU.).
+# Aeropuertos sin entrada se omiten con warning — sus features quedan a 0
+# (no-señal), el entrenamiento NO se rompe.
+#
+# Cache HTTP en disco: un parquet por (iata, start_date, end_date) bajo
+# ``cache_dir``. La caché evita repetir descargas entre runs y entre
+# splits train/val/test.
+#
+# Toggle de grupos (para ablaciones individuales, ver OPTIMIZATIONS.md):
+#   - wind            → mean wind + max gust
+#   - precip_cloud    → sum precip + mean cloud cover
+#   - category        → one-hot de categoría WMO (clear/fog/rain/snow/thunder)
+weather:
+  enabled: false                 # off por defecto: el primer run sin red sigue funcionando
+  provider: open_meteo           # único valor soportado de momento
+  cache_dir: data/processed/weather
+  params:
+    - wind
+    - precip_cloud
+    - category
+
 model:
   name: dense_nn                 # dense_nn | lstm | basic_gcn | multi_horizon_gat | spatiotemporal_gnn | seq2seq_gnn
   dense_nn:
