@@ -1,0 +1,63 @@
+{
+  "name": "pl_fake_ingestion",
+  "description": "Hourly pipeline that reads the equivalent 2022 hour from the historical parquet and writes to the live_feed landing zone. Triggered at :05 past each hour.",
+  "properties": {
+    "activities": [
+      {
+        "name": "run_ingest_live_feed",
+        "type": "TridentNotebook",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.00:20:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 60
+        },
+        "typeProperties": {
+          "notebookId": "<replace-with-notebook-item-id-after-import>",
+          "parameters": {
+            "SOURCE_YEAR": {
+              "value": "2022",
+              "type": "int"
+            },
+            "BUFFER_HOURS": {
+              "value": "168",
+              "type": "int"
+            },
+            "BACKFILL_OFFSET_HOURS": {
+              "value": "0",
+              "type": "int"
+            }
+          },
+          "sessionTimeout": 0
+        }
+      }
+    ],
+    "triggers": [
+      {
+        "name": "hourly_at_05",
+        "type": "ScheduleTrigger",
+        "properties": {
+          "recurrence": {
+            "frequency": "Hour",
+            "interval": 1,
+            "schedule": {
+              "minutes": [5]
+            },
+            "timeZone": "UTC"
+          },
+          "startTime": "<replace-with-start-datetime-UTC e.g. 2026-05-20T00:05:00Z>"
+        }
+      }
+    ]
+  },
+  "_comments": {
+    "setup_steps": [
+      "1. Import nb_ingest_live_feed.ipynb into your Fabric workspace.",
+      "2. Replace <replace-with-notebook-item-id-after-import> with the notebook's item ID.",
+      "   (Find it in the Fabric workspace URL when the notebook is open.)",
+      "3. Update startTime to a near-future UTC datetime.",
+      "4. Import this JSON into Fabric Data Factory via New Pipeline > Import.",
+      "5. Enable the trigger."
+    ]
+  }
+}
