@@ -1,0 +1,6 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: flight-delay-prod
+version: "1"
+description: "PyTorch 2.1 + PyTorch Geometric 2.4 (cu118) for flight delay GNN training"
+build:
+  dockerfile_path: aml/environments/Dockerfile
