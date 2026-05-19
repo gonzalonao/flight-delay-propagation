@@ -1,37 +1,66 @@
 {
   "name": "pl_fake_ingestion",
-  "description": "Hourly pipeline that reads the equivalent 2022 hour from the historical parquet and writes to the live_feed landing zone. Triggered at :05 past each hour.",
+  "description": "Hourly pipeline that calls the GetFlightData Azure Function to ingest the equivalent 2022 hour into the live_feed landing zone. Triggered at :05 past each hour.",
   "properties": {
     "activities": [
       {
-        "name": "run_ingest_live_feed",
-        "type": "TridentNotebook",
+        "name": "call_flight_data_api",
+        "type": "WebActivity",
         "dependsOn": [],
         "policy": {
-          "timeout": "0.00:20:00",
+          "timeout": "0.00:05:00",
           "retry": 1,
           "retryIntervalInSeconds": 60
         },
         "typeProperties": {
-          "notebookId": "<replace-with-notebook-item-id-after-import>",
-          "parameters": {
-            "SOURCE_YEAR": {
-              "value": "2022",
-              "type": "int"
-            },
-            "BUFFER_HOURS": {
-              "value": "168",
-              "type": "int"
-            },
-            "BACKFILL_OFFSET_HOURS": {
-              "value": "0",
-              "type": "int"
-            }
+          "method": "POST",
+          "url": "@concat('https://', pipeline().parameters.FunctionAppHostname, '/api/v1/flights/ingest')",
+          "headers": {
+            "x-functions-key": "@pipeline().parameters.FunctionKey",
+            "Content-Type": "application/json"
           },
-          "sessionTimeout": 0
+          "body": {
+            "timestamp": "@formatDateTime(pipeline().TriggerTime, 'yyyy-MM-ddTHH:00:00Z')"
+          }
+        }
+      },
+      {
+        "name": "check_ingestion_status",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "call_flight_data_api",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@equals(activity('call_flight_data_api').output.status, 'ok')",
+            "type": "Expression"
+          },
+          "ifFalseActivities": [
+            {
+              "name": "fail_on_bad_status",
+              "type": "Fail",
+              "typeProperties": {
+                "message": "@concat('GetFlightData returned non-ok status: ', string(activity('call_flight_data_api').output))",
+                "errorCode": "INGESTION_FAILED"
+              }
+            }
+          ]
         }
       }
     ],
+    "parameters": {
+      "FunctionAppHostname": {
+        "type": "string",
+        "defaultValue": "<replace-with-function-app-hostname e.g. flight-data-api-abc123.azurewebsites.net>"
+      },
+      "FunctionKey": {
+        "type": "string",
+        "defaultValue": "<replace-with-function-key-or-use-key-vault-reference>"
+      }
+    },
     "triggers": [
       {
         "name": "hourly_at_05",
@@ -52,12 +81,16 @@
   },
   "_comments": {
     "setup_steps": [
-      "1. Import nb_ingest_live_feed.ipynb into your Fabric workspace.",
-      "2. Replace <replace-with-notebook-item-id-after-import> with the notebook's item ID.",
-      "   (Find it in the Fabric workspace URL when the notebook is open.)",
-      "3. Update startTime to a near-future UTC datetime.",
-      "4. Import this JSON into Fabric Data Factory via New Pipeline > Import.",
-      "5. Enable the trigger."
+      "1. Deploy azure_functions/flight_data_api/ to an Azure Function App (Python 3.10, Consumption plan).",
+      "2. Set app settings: ONELAKE_WORKSPACE_ID, ONELAKE_LAKEHOUSE_ID, BUFFER_HOURS=168, SOURCE_YEAR=2022.",
+      "3. Enable system-assigned Managed Identity on the Function App.",
+      "4. Grant the Managed Identity 'Storage Blob Data Contributor' on the OneLake ADLS Gen2 endpoint.",
+      "5. Replace FunctionAppHostname default with your Function App hostname.",
+      "6. Replace FunctionKey default with a function-level key (or use Azure Key Vault reference).",
+      "7. Update startTime to a near-future UTC datetime.",
+      "8. Import this JSON into Fabric Data Factory via New Pipeline > Import.",
+      "9. Enable the trigger.",
+      "10. Before enabling pl_hourly_predict, run nb_backfill_buffer to pre-populate the rolling buffer."
     ]
   }
 }
