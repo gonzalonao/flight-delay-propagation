@@ -1,0 +1,3 @@
+azure-functions>=1.18
+azure-identity>=1.15
+deltalake>=0.14
