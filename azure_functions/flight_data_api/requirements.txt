@@ -1,0 +1,5 @@
+azure-functions>=1.18
+azure-identity>=1.15
+adlfs>=2023.9
+pyarrow>=14.0
+pandas>=2.0
