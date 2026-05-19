@@ -120,7 +120,7 @@ def main() -> None:
             graph_config["graph"].pop("prediction_horizons", None)
 
         # --- Pipeline de grafos ---
-        graphs, airport_map = build_graph_dataset(df, airports, graph_config)
+        graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, graph_config)
         split_cfg = config.get("split", {})
         graph_splits = split_graphs_temporal(
             graphs,

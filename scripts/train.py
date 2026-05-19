@@ -8,6 +8,7 @@ Uso:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -188,6 +189,55 @@ def _build_criterion(config: dict) -> torch.nn.Module:
     return torch.nn.MSELoss()
 
 
+def _save_deployment_artifacts(
+    output_dir: Path,
+    airport_map: dict[str, int],
+    norm_stats: dict | None,
+    config: dict,
+) -> None:
+    """Guarda los artefactos necesarios para el despliegue junto al checkpoint.
+
+    Produce tres ficheros en output_dir:
+      - airport_map.json    mapeo IATA → índice de nodo (congelado en deploy)
+      - feature_stats.pt    media y desviación de las node features de train
+      - metadata.json       métricas de config para champion/challenger
+
+    Estos ficheros deben subirse a OneLake junto a best_{model}_inference.pt
+    (generado por deploy/prep_inference_checkpoint.py).
+    """
+    airport_map_path = output_dir / "airport_map.json"
+    with open(airport_map_path, "w") as f:
+        json.dump(airport_map, f, indent=2)
+    logger.info("airport_map guardado: %s (%d aeropuertos)", airport_map_path, len(airport_map))
+
+    if norm_stats is not None:
+        stats_path = output_dir / "feature_stats.pt"
+        torch.save(norm_stats, stats_path)
+        logger.info("feature_stats guardado: %s", stats_path)
+    else:
+        logger.warning(
+            "normalize_features=False en config → feature_stats.pt no generado. "
+            "El notebook de inferencia debe aplicar la misma escala que en entrenamiento."
+        )
+
+    meta = {
+        "model_name": config["model"]["name"],
+        "input_dim": None,
+        "edge_dim": 5,
+        "num_airports": len(airport_map),
+        "prediction_horizons": config.get("graph", {}).get("prediction_horizons", [1, 2, 4, 6, 8]),
+        "normalize_features": config.get("graph", {}).get("normalize_features", False),
+        "loss": config.get("training", {}).get("loss", "mse"),
+        "checkpoint_file": f"best_{config['model']['name']}_inference.pt",
+        "airport_map_file": "airport_map.json",
+        "feature_stats_file": "feature_stats.pt" if norm_stats is not None else None,
+    }
+    meta_path = output_dir / "metadata.json"
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+    logger.info("metadata.json guardado: %s", meta_path)
+
+
 def _train_tabular(config: dict, df, airports: list[str]) -> None:
     """Pipeline de entrenamiento para modelos tabulares (DenseNN, LSTM)."""
     target_col = config.get("features", {}).get("target", "ArrDelay")
@@ -272,7 +322,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
         graph_config["graph"].pop("prediction_horizons", None)
 
     # Construir grafos temporales
-    graphs, airport_map = build_graph_dataset(df, airports, graph_config)
+    graphs, airport_map, norm_stats = build_graph_dataset(df, airports, graph_config)
     split_cfg = config.get("split", {})
     graph_splits = split_graphs_temporal(
         graphs,
@@ -371,6 +421,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
             )
             log_test_results(metrics, model_name, logger)
 
+    _save_deployment_artifacts(output_dir, airport_map, norm_stats, config)
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 
 
@@ -383,7 +434,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
     model_name = config["model"]["name"]
 
     # Construir grafos temporales (multi-horizonte)
-    graphs, airport_map = build_graph_dataset(df, airports, config)
+    graphs, airport_map, norm_stats = build_graph_dataset(df, airports, config)
     split_cfg = config.get("split", {})
     graph_splits = split_graphs_temporal(
         graphs,
@@ -485,6 +536,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         )
         log_multi_horizon_results(metrics, model_name, horizons, logger)
 
+    _save_deployment_artifacts(output_dir, airport_map, norm_stats, config)
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
 
 

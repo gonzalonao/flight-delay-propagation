@@ -1495,7 +1495,7 @@ def build_graph_dataset(
     df: pd.DataFrame,
     airports: list[str],
     config: dict,
-) -> tuple[list[Data], dict[str, int]]:
+) -> tuple[list[Data], dict[str, int], dict[str, torch.Tensor] | None]:
     """Pipeline completo: de DataFrame a lista de grafos PyG.
 
     Si ``config['graph']['cache_dir']`` apunta a un directorio, se usa
@@ -1509,7 +1509,11 @@ def build_graph_dataset(
         config: Configuración con secciones 'graph' y 'evaluation'.
 
     Returns:
-        Tupla de (lista de grafos Data, mapeo de aeropuertos).
+        Tupla de (lista de grafos Data, mapeo de aeropuertos, estadísticas de
+        normalización {mean, std} o None si normalize_features=False).
+        Las estadísticas de normalización son necesarias en inferencia para
+        escalar los features de la misma forma que durante el entrenamiento;
+        guárdalas junto al checkpoint con ``torch.save(norm_stats, path)``.
     """
     graph_config = config.get("graph", {})
     eval_config = config.get("evaluation", {})
@@ -1526,7 +1530,7 @@ def build_graph_dataset(
                 cache_path, size_mb,
             )
             payload = torch.load(cache_path, weights_only=False)
-            return payload["graphs"], payload["airport_map"]
+            return payload["graphs"], payload["airport_map"], payload.get("norm_stats")
         logger.info(
             "Caché MISS: no existe %s. Generando snapshots y escribiendo "
             "caché tras el build.",
@@ -1573,23 +1577,31 @@ def build_graph_dataset(
         weather_lookups=weather_lookups,
     )
 
-    # Normalizar features usando solo estadísticas de entrenamiento
+    # Normalizar features usando solo estadísticas de entrenamiento.
+    # Las estadísticas se devuelven para persistirlas junto al checkpoint
+    # (necesarias para escalar features de la misma forma en inferencia).
+    norm_stats: dict[str, torch.Tensor] | None = None
     normalize = graph_config.get("normalize_features", False)
     if normalize and graphs:
         n = len(graphs)
         train_end = int(n * 0.7)
         train_indices = list(range(train_end))
-        graphs, _ = normalize_graph_features(graphs, train_indices)
+        graphs, norm_stats = normalize_graph_features(graphs, train_indices)
 
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
-            {"graphs": graphs, "airport_map": airport_map, "schema": GRAPH_SCHEMA_VERSION},
+            {
+                "graphs": graphs,
+                "airport_map": airport_map,
+                "schema": GRAPH_SCHEMA_VERSION,
+                "norm_stats": norm_stats,
+            },
             cache_path,
         )
         logger.info("Snapshots cacheados en: %s", cache_path)
 
-    return graphs, airport_map
+    return graphs, airport_map, norm_stats
 
 
 def split_graphs_temporal(
