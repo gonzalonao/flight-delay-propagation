@@ -104,7 +104,7 @@ def test_node_features_do_not_leak_future_arr_delay(synthetic_config):
     """Snapshots con current_end ≤ sentinel_arr_ts no contienen su ArrDelay."""
     df = _make_synthetic_df()
     airports = ["AAA", "BBB", "CCC"]
-    graphs, airport_map = build_graph_dataset(df, airports, synthetic_config)
+    graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, synthetic_config)
     assert len(graphs) > 0
 
     # Sentinel: vuelo AAA→BBB que sale a las 18:00 → arr_ts=19:00.
@@ -132,7 +132,7 @@ def test_edge_attr_do_not_leak_future_arr_delay(synthetic_config):
     """recent_route_delay no incluye al vuelo futuro sentinelado."""
     df = _make_synthetic_df()
     airports = ["AAA", "BBB", "CCC"]
-    graphs, airport_map = build_graph_dataset(df, airports, synthetic_config)
+    graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, synthetic_config)
     assert len(graphs) > 0
 
     sentinel_arr_ts = pd.Timestamp("2018-01-01 19:00")
@@ -160,7 +160,7 @@ def test_targets_do_use_future_window(synthetic_config):
     """Sanidad: el target SÍ captura al vuelo futuro (no es leakage)."""
     df = _make_synthetic_df()
     airports = ["AAA", "BBB", "CCC"]
-    graphs, airport_map = build_graph_dataset(df, airports, synthetic_config)
+    graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, synthetic_config)
 
     # Sentinel arriba a BBB a las 19:00. Para el snapshot con
     # current_end=18:00, target h=2 cubre [19:00, 20:00) y captura el vuelo.
