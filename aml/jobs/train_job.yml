@@ -1,0 +1,50 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+
+experiment_name: flight-delay-propagation
+display_name: monthly-retrain-seq2seq-gnn
+description: "Monthly retraining of Seq2SeqGNN on accumulated live_feed + historical data"
+
+compute: azureml:flight-delay-gpu-cluster
+
+environment: azureml:flight-delay-prod:1
+
+inputs:
+  historical_data:
+    type: uri_folder
+    # Adjust this path to your AzureML datastore name.
+    path: azureml://datastores/onelake_datastore/paths/raw/historical_2018_2021/
+    # Download to local SSD: ~28 GB, ~80 s, faster than FUSE random-access.
+    mode: download
+  live_feed_data:
+    type: uri_folder
+    path: azureml://datastores/onelake_datastore/paths/live_feed/
+    # ro_mount for live_feed: grows over time, too large to always download.
+    mode: ro_mount
+
+outputs:
+  model_output:
+    type: uri_folder
+    path: azureml://datastores/onelake_datastore/paths/models/challenger/
+    mode: rw_mount
+
+code: ../..
+
+command: >
+  pip install -e . --no-deps &&
+  python scripts/train.py --config configs/production.yaml
+
+environment_variables:
+  PYTHONPATH: "."
+  TORCH_HOME: "/tmp/torch_cache"
+
+resources:
+  instance_type: Standard_NC4as_T4_v3
+  instance_count: 1
+
+limits:
+  timeout: 300  # 5 hours max; typical run is 3-4 h on T4 with 4-year dataset
+
+distribution:
+  type: PyTorch
+  process_count_per_instance: 1

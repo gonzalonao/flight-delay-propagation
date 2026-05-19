@@ -32,6 +32,15 @@ dev = [
     "ipykernel>=6.25",
     "ruff>=0.3",
 ]
+# Azure deployment dependencies — not installed by default to keep the
+# research environment clean. Used by Azure Functions, AzureML jobs,
+# and the Fabric notebooks.
+deploy = [
+    "azure-storage-file-datalake>=12.0",
+    "azure-identity>=1.15",
+    "azure-ai-ml>=1.12",
+    "deltalake>=0.14",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

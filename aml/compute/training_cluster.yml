@@ -1,0 +1,9 @@
+$schema: https://azuremlschemas.azureedge.net/latest/amlCompute.schema.json
+name: flight-delay-gpu-cluster
+type: amlcompute
+size: Standard_NC4as_T4_v3
+min_instances: 0
+max_instances: 1
+# Deallocate quickly after the monthly job to avoid idle charges.
+idle_time_before_scale_down: 120
+tier: dedicated

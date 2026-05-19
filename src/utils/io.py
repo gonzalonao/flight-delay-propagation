@@ -105,6 +105,37 @@ def save_checkpoint(
     torch.save(payload, path)
 
 
+def load_checkpoint_inference_only(
+    path: str | Path,
+    model: torch.nn.Module,
+    device: str = "cpu",
+) -> dict[str, Any]:
+    """Carga un checkpoint inference-only (sin optimizer_state_dict).
+
+    Usa ``weights_only=True`` para evitar la ejecución de código pickle
+    arbitrario. Requiere que el checkpoint haya sido preparado con
+    ``deploy/prep_inference_checkpoint.py`` (que elimina el optimizer_state_dict,
+    el cual no es deserializable con weights_only=True en PyTorch ≥2.1).
+
+    Args:
+        path: Ruta al archivo de checkpoint inference-only (.pt).
+        model: Modelo donde cargar los pesos.
+        device: Dispositivo destino ("cpu" o "cuda").
+
+    Returns:
+        Diccionario con ``epoch``, ``metrics`` y opcionalmente ``model_name``.
+    """
+    checkpoint = torch.load(path, map_location=device, weights_only=True)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    result: dict[str, Any] = {
+        "epoch": checkpoint.get("epoch"),
+        "metrics": checkpoint.get("metrics", {}),
+    }
+    if "model_name" in checkpoint:
+        result["model_name"] = checkpoint["model_name"]
+    return result
+
+
 def load_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
