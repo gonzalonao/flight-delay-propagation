@@ -1,0 +1,103 @@
+# =============================================================================
+# Production config — Azure ML training + Fabric inference
+# Deep-merged on top of configs/seq2seq_gnn.yaml by load_config().
+# Only keys that differ from seq2seq_gnn.yaml appear here.
+# =============================================================================
+
+data:
+  # AzureML mounts these paths via the job spec inputs section.
+  raw_dir: /mnt/inputs/historical_data
+  live_feed_dir: /mnt/inputs/live_feed_data
+  years: [2018, 2019, 2020, 2021]
+  live_feed_years: [2022]
+  processed_dir: /tmp/processed
+  sample_frac: null
+  random_seed: 42
+  columns:
+    - FlightDate
+    - Airline
+    - Origin
+    - Dest
+    - CRSDepTime
+    - CRSArrTime
+    - CRSElapsedTime
+    - Distance
+    - Month
+    - DayOfWeek
+    - DayofMonth
+    - Cancelled
+    - Diverted
+    - DepTime
+    - ArrTime
+    - DepDelay
+    - ArrDelay
+    - DepDel15
+    - ArrDel15
+    - WheelsOff
+    - WheelsOn
+    - TaxiOut
+    - TaxiIn
+    - AirTime
+    - ActualElapsedTime
+    - CarrierDelay
+    - WeatherDelay
+    - NASDelay
+    - SecurityDelay
+    - LateAircraftDelay
+
+split:
+  method: temporal
+  train_end: "2021-07-01"
+  val_end:   "2021-10-01"
+
+graph:
+  top_n_airports: 70
+  min_route_flights: 30
+  temporal_window_hours: 1
+  input_window: 6
+  prediction_horizons: [1, 2, 4, 6, 8]
+  normalize_features: true
+  # AzureML ephemeral SSD — fast, discarded after job.
+  cache_dir: /tmp/processed/snapshots
+
+model:
+  name: seq2seq_gnn
+  seq2seq_gnn:
+    hidden_dim: 128
+    num_heads: 4
+    num_spatial_layers: 3
+    num_temporal_layers: 2
+    dropout: 0.3
+
+training:
+  epochs: 100
+  batch_size: 512
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  scheduler: cosine
+  patience: 25
+  gradient_clip: 1.0
+  # NC4as_T4_v3 has 4 vCPU; leave 2 for data loading.
+  num_workers: 2
+  # Hard fail if no GPU — prevents silent CPU-only runs on AzureML.
+  device: cuda
+  # multi_task is required: it sets output_channels=3 in build_model.
+  # The inference notebook must load this same config to match the checkpoint.
+  loss: multi_task
+  huber_delta: 10.0
+  delay_weight: 2.0
+  horizon_weights: [3, 3, 4, 5, 5]
+  multi_task:
+    main_weight: 1.0
+    aux_weight: 0.3
+    bce_weight: 0.5
+    bce_pos_weight: null
+
+evaluation:
+  metrics: [mae, rmse, mape, r2]
+  delay_threshold_minutes: 15
+
+reproducibility:
+  seed: 42
+  # deterministic=True adds ~30 % overhead on T4; disabled for production.
+  deterministic: false
