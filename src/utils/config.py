@@ -5,10 +5,29 @@ opcional desde un archivo local (local.yaml) para rutas específicas de cada
 máquina. El archivo local.yaml está en .gitignore.
 """
 
+import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+_ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+
+
+def _expand_env_vars(value: Any) -> Any:
+    """Sustituye ``${VAR}`` por ``os.environ[VAR]`` en strings (recursivo).
+
+    Si la variable no está definida, deja el placeholder intacto (permite
+    detectar errores en runs locales sin romper los configs).
+    """
+    if isinstance(value, str):
+        return _ENV_VAR_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
+    if isinstance(value, dict):
+        return {k: _expand_env_vars(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_vars(v) for v in value]
+    return value
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -81,6 +100,9 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
             local_config = yaml.safe_load(f)
         if local_config:
             config = _deep_merge(config, local_config)
+
+    # Capa 4: expansión de ${VAR} en strings (paths de AzureML, etc.).
+    config = _expand_env_vars(config)
 
     return config
 

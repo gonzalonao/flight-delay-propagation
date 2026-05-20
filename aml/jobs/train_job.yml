@@ -31,6 +31,8 @@ outputs:
 code: ../..
 
 command: >
+  export RAW_DIR=${{inputs.historical_data}} &&
+  export LIVE_FEED_DIR=${{inputs.live_feed_data}} &&
   pip install -e . --no-deps &&
   python scripts/train.py --config configs/production.yaml
 
@@ -43,7 +45,8 @@ resources:
   instance_count: 1
 
 limits:
-  timeout: 300  # 5 hours max; typical run is 3-4 h on T4 with 4-year dataset
+  # 5 hours = 18000 s. Typical run is 3-4 h on T4 with 4-year dataset.
+  timeout: 18000
 
 distribution:
   type: PyTorch
