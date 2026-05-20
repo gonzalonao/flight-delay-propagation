@@ -24,9 +24,9 @@ AML_WORKSPACE="flight-delay-aml"
 # create` fails with QuotaExceeded.
 AML_LOCATION="francecentral"
 
-ONELAKE_ACCOUNT="<your-onelake-account>.dfs.fabric.microsoft.com"
-ONELAKE_CONTAINER="<your-workspace-name>"          # Fabric workspace name
-ONELAKE_LAKEHOUSE="<your-lakehouse-name>.Lakehouse" # Lakehouse name in Fabric
+ONELAKE_ACCOUNT="onelake.dfs.fabric.microsoft.com"
+ONELAKE_CONTAINER="TFM_Flight_Prediction"           # Fabric workspace name
+ONELAKE_LAKEHOUSE="FlightData_Lakehouse.Lakehouse"  # Lakehouse name in Fabric
 
 CHECKPOINT_PATH="outputs/best_seq2seq_gnn.pt"      # Local training checkpoint
 AIRPORT_MAP_PATH="outputs/airport_map.json"         # Saved from training run
