@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Azure Functions local settings (contains env vars / connection strings)
+local.settings.json
+
 # C extensions
 *.so
 
