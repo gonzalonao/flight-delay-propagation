@@ -11,7 +11,7 @@
 ## 🚦 Resume here (session handoff — last updated 2026-05-20)
 
 **Working branch:** `claude/analyze-model-format-w89p1`
-**Current phase:** **1 — Deploy `GetFlightData` Azure Function**, *blocked* on confirming OneLake SDK choice.
+**Current phase:** **Phase 1 complete.** Next is **Phase 2 — Ingestion pipeline + backfill**.
 
 ### What's done
 
@@ -19,43 +19,35 @@
 |---|---|
 | Fabric workspace `TFM_Flight_Prediction` + Lakehouse `FlightData_Lakehouse` | ✅ Provisioned (region: francecentral, F2 trial capacity) |
 | `Combined_Flights_2022.parquet` uploaded to OneLake | ✅ at `Files/raw/historical_2022/` |
-| 4 champion artifacts uploaded to OneLake | ✅ at `Files/models/champion/` (`best_seq2seq_gnn_inference.pt`, `airport_map.json`, `feature_stats.pt`, `metadata.json`) |
-| Audit fixes (train_job timeout, env-var substitution, horizon convention, function timeouts) | ✅ Committed `b449d08` |
-| `scripts/extract_artifacts.py` (generates 3 artifacts without retraining) | ✅ Committed `d9efdff` |
-| Demo-scope plan rewrite (Phase 0b/6 marked scaffolding-only) | ✅ Committed `5aa1c6a` |
+| 4 champion artifacts uploaded to OneLake | ✅ at `Files/models/champion/` |
+| Code audit fixes | ✅ Committed `b449d08` |
+| `scripts/extract_artifacts.py` | ✅ Committed `d9efdff` |
+| Demo-scope plan rewrite | ✅ Committed `5aa1c6a` |
 | `bootstrap.sh` filled with real OneLake names | ✅ Committed `ce3a5f3` |
-| OneLake auth smoke test (`deploy/smoke_onelake.py`) using azure-storage-file-datalake SDK | ✅ Committed `09c9b8a` |
+| OneLake smoke test (DataLakeServiceClient) | ✅ Committed `09c9b8a` |
+| `GetFlightData` refactored (adlfs → DataLakeServiceClient) | ✅ Download-then-filter with module-level cache |
+| `requirements.txt` updated | ✅ `adlfs` replaced with `azure-storage-file-datalake` |
+| Local `func start` test | ✅ 200 OK, 1148 rows, all 3 OneLake targets written |
+| Azure Function App deployed | ✅ `func-flight-ingest` in `rg-tfm-flight` (francecentral, Consumption, Python 3.11, Linux) |
+| Managed Identity → Fabric workspace Member | ✅ |
+| Cloud endpoint verified | ✅ POST returned `status: ok` |
 
-### What's blocked / next concrete step
+### Azure resource names (for reference)
 
-The first version of `deploy/smoke_onelake.py` used `adlfs.AzureBlobFileSystem` with `custom_domain="onelake.dfs.fabric.microsoft.com"`. The `custom_domain` kwarg is silently ignored by current adlfs versions, so requests went to `https://onelake.blob.core.windows.net` and returned `AccountIsDisabled`. The smoke test was rewritten (`09c9b8a`) to use `azure.storage.filedatalake.DataLakeServiceClient` with explicit `account_url`.
+| Resource | Name |
+|---|---|
+| Resource group | `rg-tfm-flight` |
+| Storage account | `stflightfunc` |
+| Function App (ingestion) | `func-flight-ingest` |
+| Function App URL | `https://func-flight-ingest.azurewebsites.net/api/v1/flights/ingest` |
 
-**Next action on the new machine:**
+### What's next — Phase 2: Ingestion pipeline + backfill
 
-```powershell
-cd C:\Users\gonza\dev\flight-delay-propagation     # or wherever the repo lives
-git pull
-pip install -e . azure-storage-file-datalake azure-identity pyarrow
-az login
-python deploy/smoke_onelake.py
-```
+1. Create `pl_fake_ingestion` pipeline in Fabric Data Factory — Web Activity calling `POST /v1/flights/ingest`, triggered hourly at :05 UTC.
+2. Run `nb_backfill_buffer` notebook — calls GetFlightData 168 times (one per hour, 7 days back) to populate `rolling_buffer/` before inference starts.
+3. Verify 168 partitions exist in `live_feed/rolling_buffer/`.
 
-**Expected outcomes:**
-
-- **All 4 steps pass** → refactor `azure_functions/flight_data_api/GetFlightData/__init__.py` to use `DataLakeServiceClient` (the existing adlfs-based code in that file is known to be broken). Then proceed to deploy the Function App.
-- **Step 2 (workspace ls) fails with 403** → grant the signed-in account Member access on the `TFM_Flight_Prediction` workspace via Fabric portal → *Manage access*.
-- **Step 3 (download) fails with 404** → verify the file path matches exactly what's in the Lakehouse Files tab. Names are case-sensitive.
-
-### After the refactor — remainder of Phase 1
-
-1. Update `azure_functions/flight_data_api/requirements.txt`: replace `adlfs` with `azure-storage-file-datalake`.
-2. Local test with Azure Functions Core Tools: `func start` in `azure_functions/flight_data_api/`, then `curl` against `http://localhost:7071/api/v1/flights/ingest`.
-3. Create the Function App in Azure (Consumption plan, Python 3.10, francecentral).
-4. Enable system-assigned Managed Identity on the Function App.
-5. Add the Managed Identity as a Member of the Fabric workspace (Fabric portal → workspace → *Manage access*).
-6. Set app settings: `ONELAKE_WORKSPACE_ID=TFM_Flight_Prediction`, `ONELAKE_LAKEHOUSE_ID=FlightData_Lakehouse`, `BUFFER_HOURS=168`, `SOURCE_YEAR=2022`.
-7. Deploy with `func azure functionapp publish <function-app-name>`.
-8. Verify with `curl -X POST "https://<app>.azurewebsites.net/api/v1/flights/ingest?timestamp=2026-05-20T14:00:00Z" -H "x-functions-key: <key>"`.
+Then Phase 3 (inference pipeline), Phase 4 (Power BI), Phase 5 (Predictions API).
 
 ### Then Phase 2 → 5 in order (see "Implementation Sequence" below).
 
@@ -91,8 +83,8 @@ The model (Seq2SeqGNN, Transformer encoder-decoder) is fully trained on the `fea
 | Trained model checkpoint (.pt) | ✅ Stripped via `prep_inference_checkpoint.py` |
 | 3 deployment artifacts (airport_map.json, feature_stats.pt, metadata.json) | ✅ Generated via `extract_artifacts.py` |
 | All 4 champion artifacts uploaded to OneLake | ✅ At `Files/models/champion/` |
-| OneLake SDK choice verified | ⏳ Re-run `deploy/smoke_onelake.py` on new machine |
-| `GetFlightData` Function refactor + deploy | ⏳ Pending (next step after smoke test passes) |
+| OneLake SDK choice verified | ✅ `azure-storage-file-datalake` confirmed |
+| `GetFlightData` Function deployed to Azure | ✅ `func-flight-ingest` (rg-tfm-flight, francecentral) |
 | Inference notebook + Power BI + Predictions API | ⏳ Pending |
 | Monthly retraining pipeline | 📄 Scaffolding only — never enabled |
 
@@ -380,7 +372,7 @@ down the F2 capacity (the Lakehouse data persists in storage either way).
 | **0b — Azure ML setup** | ⏭️ Skipped | Not needed for demo (no GPU on Student sub, retrain never runs) |
 | **0c — Upload data** | ⏳ Pending | `Combined_Flights_2022.parquet` (only) in OneLake — 2018–2021 not needed since we never retrain |
 | **0d — Checkpoint prep** | ⏳ Pending | `extract_artifacts.py` → `prep_inference_checkpoint.py` → 4 champion artifacts uploaded to OneLake |
-| **1 — GetFlightData API** | ⏳ Pending | Azure Function deployed, RBAC granted, manual `POST /v1/flights/ingest` returns `status: ok` |
+| **1 — GetFlightData API** | ✅ Done | `func-flight-ingest` deployed, Managed Identity granted, cloud POST returns `status: ok` |
 | **2 — Ingestion pipeline** | ⏳ Pending | `pl_fake_ingestion` Web Activity enabled; `nb_backfill_buffer` run once; rolling_buffer populated |
 | **3 — Inference pipeline** | ⏳ Pending | `nb_inference` tested; `pl_hourly_predict` enabled; `predictions/latest` Delta table populated |
 | **4 — Power BI** | ⏳ Pending | DirectLake semantic model connected; Azure Maps visual + drill-down page published |
