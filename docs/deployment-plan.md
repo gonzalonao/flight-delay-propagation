@@ -1,12 +1,18 @@
 # Production Deployment Plan: Flight Delay Propagation ML System
 
+> **Scope: demo-only TFM deployment.** Built on **Azure for Students** (no GPU
+> SKUs). The monthly retraining pipeline is shipped as code-as-documentation
+> and is intentionally **not enabled** — the architecture is defensible at
+> thesis defense without actually running it. Everything else (ingestion,
+> inference, serving, dashboard) is wired live.
+
 ## Context
 
-The model (Seq2SeqGNN, Transformer encoder-decoder) is fully trained on the `feat/weather-integration` branch and outputs hourly delay predictions for 70 US airports across 5 horizons (1h, 2h, 4h, 6h, 8h ahead). The goal is to deploy this to a production-grade Microsoft Azure / Fabric pipeline that:
-1. Simulates live data ingestion via a real HTTP API (backed by historical 2022 files)
-2. Runs hourly inference and exposes results to Power BI
-3. Retrains the model monthly on accumulated data
-4. Exposes predictions via a second REST API and an interactive airport map
+The model (Seq2SeqGNN, Transformer encoder-decoder) is fully trained on the `feat/weather-integration` branch and outputs hourly delay predictions for 70 US airports across 5 horizons (1h, 2h, 4h, 6h, 8h ahead). The goal is to deploy this to a Microsoft Azure / Fabric pipeline that demonstrates how a production system would:
+1. Simulate live data ingestion via a real HTTP API (backed by historical 2022 files)
+2. Run hourly inference and expose results to Power BI
+3. ~~Retrain the model monthly on accumulated data~~ — **scaffolded only, not enabled** (Student-sub GPU restriction; the trained champion is uploaded once and stays the champion).
+4. Expose predictions via a second REST API and an interactive airport map
 
 ---
 
@@ -15,10 +21,12 @@ The model (Seq2SeqGNN, Transformer encoder-decoder) is fully trained on the `fea
 | Step | Status |
 |---|---|
 | Fabric workspace + Lakehouse created | ✅ Done |
-| Azure ML workspace, compute, environment | ⏳ Pending |
-| Upload historical parquets to OneLake | ⏳ Pending (data downloading locally) |
-| All code / notebooks / pipelines | ⏳ Pending |
-| Trained model checkpoint | ⏳ Pending |
+| Azure ML workspace, compute, environment | ⏭️ Skipped (demo-only; retrain is scaffolding) |
+| Upload historical parquets to OneLake | ⏳ Pending |
+| Trained model checkpoint (.pt) | ✅ Available on `feat/weather-integration` |
+| 3 deployment artifacts (airport_map.json, feature_stats.pt, metadata.json) | ⏳ Run `scripts/extract_artifacts.py` |
+| Inference notebook + Power BI + Predictions API | ⏳ Pending |
+| Monthly retraining pipeline | 📄 Scaffolding only — never enabled |
 
 ---
 
@@ -261,21 +269,22 @@ Python kernel notebook (not Spark — PyTorch + PyG not available in Fabric Spar
 
 ---
 
-## Monthly Cost Estimate (East US, pay-as-you-go)
+## Monthly Cost Estimate (France Central, Azure for Students + Fabric trial)
 
 | Service | SKU / Usage | Monthly Cost |
 |---|---|---|
-| Microsoft Fabric | F2 reserved capacity (OneLake, Data Factory, Notebooks, Power BI Premium) | ~$365 |
-| OneLake storage | ~100 GB LRS | ~$2 |
-| Azure ML compute | NC4as_T4_v3 × ~3h/month, scale-to-zero | ~$2 |
+| Microsoft Fabric | F2 capacity via **60-day free trial** | $0 |
+| OneLake storage | ~10 GB LRS during demo period | <$1 (covered by Student credit) |
+| ~~Azure ML compute~~ | Not provisioned | $0 |
 | Function App #1 (GetFlightData) | Consumption, 720 calls/month, ~2s each | $0 (free tier) |
 | Function App #2 (GetFlightPredictions) | Consumption, ~5K calls/month | $0 (free tier) |
-| Function App storage accounts (×2) | 2 × ~1 GB LRS | ~$0.05 |
+| Function App storage accounts (×2) | 2 × ~1 GB LRS | <$0.10 |
 | Azure API Management | Consumption tier, ~5K calls/month | $0 (free tier) |
-| Azure Monitor / misc | Basic logging, Key Vault | ~$3 |
-| **Total** | | **~$372/month** |
+| **Total (demo period)** | | **≈ $0** (within $100 Student credit + Fabric trial) |
 
-**Cost reduction:** Fabric 60-day free trial → $0 for initial setup. F2 1-year reserved → ~$255/month.
+After the Fabric 60-day trial ends, F2 pay-as-you-go is ~$365/mo on PAYG subs.
+For TFM defense, time the demo window so the trial is still active, then tear
+down the F2 capacity (the Lakehouse data persists in storage either way).
 
 ---
 
@@ -300,17 +309,17 @@ Python kernel notebook (not Spark — PyTorch + PyG not available in Fabric Spar
 | Phase | Status | Deliverable |
 |---|---|---|
 | **0a — Fabric Lakehouse** | ✅ Done | Lakehouse created |
-| **0b — Azure ML setup** | ⏳ Pending | Run steps 1–3 of `bootstrap.sh`: workspace, GPU cluster, environment Docker build (~20 min) |
-| **0c — Upload data** | ⏳ Pending (data downloading) | `Combined_Flights_2022.parquet` + 2018–2021 parquets in OneLake |
-| **0d — Checkpoint prep** | ⏳ Pending (needs trained model) | `prep_inference_checkpoint.py` → 4 champion artifacts uploaded to OneLake |
+| **0b — Azure ML setup** | ⏭️ Skipped | Not needed for demo (no GPU on Student sub, retrain never runs) |
+| **0c — Upload data** | ⏳ Pending | `Combined_Flights_2022.parquet` (only) in OneLake — 2018–2021 not needed since we never retrain |
+| **0d — Checkpoint prep** | ⏳ Pending | `extract_artifacts.py` → `prep_inference_checkpoint.py` → 4 champion artifacts uploaded to OneLake |
 | **1 — GetFlightData API** | ⏳ Pending | Azure Function deployed, RBAC granted, manual `POST /v1/flights/ingest` returns `status: ok` |
 | **2 — Ingestion pipeline** | ⏳ Pending | `pl_fake_ingestion` Web Activity enabled; `nb_backfill_buffer` run once; rolling_buffer populated |
 | **3 — Inference pipeline** | ⏳ Pending | `nb_inference` tested; `pl_hourly_predict` enabled; `predictions/latest` Delta table populated |
 | **4 — Power BI** | ⏳ Pending | DirectLake semantic model connected; Azure Maps visual + drill-down page published |
 | **5 — Predictions API** | ⏳ Pending | `GetFlightPredictions` Function + APIM deployed; `GET /predictions` returns JSON |
-| **6 — Retraining pipeline** | ⏳ Pending | Manual AzureML job verified; `pl_monthly_retrain` enabled |
+| **6 — Retraining pipeline** | 📄 Scaffolding only | `aml/`, `nb_submit_aml_job`, `nb_champion_challenger`, `pl_monthly_retrain` exist as code but are **not** deployed or triggered. Defended at the thesis as the production-extension path. |
 
-**Total remaining: ~9 engineering days**
+**Demo target: ~3–4 days of focused work** (phases 0c → 5).
 
 ---
 
