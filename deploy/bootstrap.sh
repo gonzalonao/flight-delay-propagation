@@ -18,7 +18,11 @@ set -euo pipefail
 # ── Configuration — fill these in before running ────────────────────────────
 AML_RESOURCE_GROUP="flight-delay-rg"
 AML_WORKSPACE="flight-delay-aml"
-AML_LOCATION="eastus"
+# France Central: closest Azure region to Spain. Requires Standard_NC4as_T4_v3
+# quota (default new-subscription quota is 0); request a bump in Azure Portal
+# under Subscriptions → Usage + quotas before step [2/6] if `az ml compute
+# create` fails with QuotaExceeded.
+AML_LOCATION="francecentral"
 
 ONELAKE_ACCOUNT="<your-onelake-account>.dfs.fabric.microsoft.com"
 ONELAKE_CONTAINER="<your-workspace-name>"          # Fabric workspace name
@@ -51,6 +55,13 @@ az ml environment create \
   --workspace-name "$AML_WORKSPACE"
 
 echo "=== [4/6] Preparing inference checkpoint (stripping optimizer state) ==="
+# If airport_map.json / feature_stats.pt / metadata.json are missing
+# (checkpoint trained before train.py started persisting them), run
+# scripts/extract_artifacts.py first:
+#   python scripts/extract_artifacts.py \
+#       --config configs/seq2seq_gnn.yaml \
+#       --checkpoint "$CHECKPOINT_PATH" \
+#       --output-dir outputs/
 python deploy/prep_inference_checkpoint.py \
   --input "$CHECKPOINT_PATH" \
   --output "outputs/best_seq2seq_gnn_inference.pt" \
