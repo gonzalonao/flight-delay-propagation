@@ -1,0 +1,325 @@
+# Production Deployment Plan: Flight Delay Propagation ML System
+
+## Context
+
+The model (Seq2SeqGNN, Transformer encoder-decoder) is fully trained on the `feat/weather-integration` branch and outputs hourly delay predictions for 70 US airports across 5 horizons (1h, 2h, 4h, 6h, 8h ahead). The goal is to deploy this to a production-grade Microsoft Azure / Fabric pipeline that:
+1. Simulates live data ingestion via a real HTTP API (backed by historical 2022 files)
+2. Runs hourly inference and exposes results to Power BI
+3. Retrains the model monthly on accumulated data
+4. Exposes predictions via a second REST API and an interactive airport map
+
+---
+
+## Current Status
+
+| Step | Status |
+|---|---|
+| Fabric workspace + Lakehouse created | ✅ Done |
+| Azure ML workspace, compute, environment | ⏳ Pending |
+| Upload historical parquets to OneLake | ⏳ Pending (data downloading locally) |
+| All code / notebooks / pipelines | ⏳ Pending |
+| Trained model checkpoint | ⏳ Pending |
+
+---
+
+## Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       MICROSOFT FABRIC WORKSPACE                         │
+│                                                                          │
+│  OneLake (ADLS Gen2)                                                     │
+│  ├── raw/historical_2022/Combined_Flights_2022.parquet  (seed data)      │
+│  ├── raw/historical_2018_2021/*.parquet                 (train data)     │
+│  ├── live_feed/class_b/YYYY/MM/DD/HH/flights.parquet   (actuals)        │
+│  ├── live_feed/class_a_schedule/YYYY/MM/DD/HH/         (schedule)       │
+│  ├── live_feed/rolling_buffer/  (last 168 hours, for lag features)      │
+│  ├── predictions/latest/        (Delta table — DirectLake source)       │
+│  ├── predictions/history/       (Delta table — append-only audit)       │
+│  └── models/champion/           (checkpoint + airport_map + stats)      │
+│                                                                          │
+│  Data Factory Pipelines                                                  │
+│  ├── pl_fake_ingestion   — hourly :05, Web Activity → GetFlightData API │
+│  ├── pl_hourly_predict   — hourly :15, Notebook activity                │
+│  └── pl_monthly_retrain  — 1st of month 02:00 UTC, 3 activities        │
+│                                                                          │
+│  Power BI (DirectLake)                                                   │
+│  ├── Page 1: Azure Maps airport heatmap (delay severity + slider)       │
+│  └── Page 2: Per-airport 5-horizon bar chart                            │
+└──────────────────────────────────────────────────────────────────────────┘
+         │ Web Activity (hourly)          │ AzureML job (monthly)
+         ▼                               ▼
+┌─────────────────────────────┐  ┌──────────────────────────────────────┐
+│  Azure Functions (App #1)   │  │  Azure Machine Learning              │
+│  "Fake Flight Data API"     │  │  Compute: NC4as_T4_v3 (T4 GPU)      │
+│                             │  │  Environment: flight-delay-prod:1    │
+│  POST /v1/flights/ingest    │  │  Job: train.py --config production   │
+│  ├── reads 2022 parquet     │  │  Output → models/challenger/         │
+│  │   from OneLake via ADLS  │  └──────────────────────────────────────┘
+│  ├── writes class_b to      │
+│  │   live_feed/class_b/     │
+│  ├── writes class_a to      │
+│  │   live_feed/class_a_sched│
+│  ├── writes rolling_buffer  │
+│  ├── trims buffer >168h     │
+│  └── returns status JSON    │
+└─────────────────────────────┘
+         │ HTTP (GET)
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Azure Functions (App #2) + API Management (Consumption)        │
+│  "Predictions API"                                              │
+│  GET /predictions?airport=ATL&horizon=2                         │
+│  Reads predictions/latest Delta table via Managed Identity      │
+│  APIM: rate-limit 60/min, 55s response cache                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why Two Separate Function Apps
+
+The ingestion API (`GetFlightData`) and the predictions API (`GetFlightPredictions`) have different runtime requirements:
+
+- **GetFlightData** needs `pyarrow` + `adlfs` + ADLS write access — heavyweight, runs once per hour, memory-intensive (reads a large parquet)
+- **GetFlightPredictions** needs `deltalake` + ADLS read access — lightweight, serves live user traffic
+
+Keeping them in separate Function Apps lets you scale, redeploy, and set resource limits independently.
+
+---
+
+## Files to Create
+
+### Azure Functions — App 1: Fake Flight Data API
+
+| Path | Purpose |
+|---|---|
+| `azure_functions/flight_data_api/GetFlightData/__init__.py` | `POST /v1/flights/ingest?timestamp=<ISO>` — reads 2022 parquet from OneLake via ADLS SDK, writes class_b + class_a + rolling_buffer, trims buffer, returns status JSON |
+| `azure_functions/flight_data_api/GetFlightData/function.json` | HTTP trigger, POST only, authLevel: function |
+| `azure_functions/flight_data_api/host.json` | Runtime config, Python 3.10, logging |
+| `azure_functions/flight_data_api/requirements.txt` | `pyarrow>=14.0`, `adlfs>=2023.9`, `azure-storage-file-datalake>=12.0`, `azure-identity>=1.15`, `pandas>=2.0` |
+
+### Azure Functions — App 2: Predictions API
+
+| Path | Purpose |
+|---|---|
+| `azure_functions/predictions_api/GetFlightPredictions/__init__.py` | `GET /predictions?airport=ATL&horizon=2` — reads Delta table via `deltalake` + Managed Identity, returns JSON |
+| `azure_functions/predictions_api/GetFlightPredictions/function.json` | HTTP trigger, GET only, authLevel: function |
+| `azure_functions/predictions_api/host.json` | Runtime config |
+| `azure_functions/predictions_api/requirements.txt` | `deltalake>=0.14`, `azure-storage-file-datalake>=12.0`, `azure-identity>=1.15` |
+
+### Fabric Notebooks
+
+| Path | Purpose |
+|---|---|
+| `fabric/notebooks/nb_backfill_buffer.ipynb` | One-time: calls `GetFlightData` in a loop for the past 168 hours to populate rolling_buffer before predictions start — **already written** |
+| `fabric/notebooks/nb_inference.ipynb` | Hourly: load last 6h + next-8h schedule, build graph sequence, run Seq2SeqGNN, write Delta |
+| `fabric/notebooks/nb_submit_aml_job.ipynb` | Monthly: submit AzureML training job via `azure-ai-ml` SDK, write run_id to log table |
+| `fabric/notebooks/nb_champion_challenger.ipynb` | Monthly: compare new model MAE vs champion; promote if ≥2% improvement, copy all 4 artifacts atomically |
+
+> `nb_ingest_live_feed.ipynb` has been superseded by the `GetFlightData` Azure Function. The Fabric pipeline calls the Function via a Web Activity — no notebook needed for ingestion.
+
+### Fabric Pipeline Definitions (JSON)
+
+| Path | Trigger | Key activity |
+|---|---|---|
+| `fabric/pipelines/pl_fake_ingestion.json` | Every hour at :05 | **Web Activity** → `POST /v1/flights/ingest` |
+| `fabric/pipelines/pl_hourly_predict.json` | Every hour at :15 | Notebook Activity → `nb_inference` |
+| `fabric/pipelines/pl_monthly_retrain.json` | 1st of month at 02:00 UTC | submit → Until poll → champion/challenger |
+
+### Azure ML
+
+| Path | Purpose |
+|---|---|
+| `aml/compute/training_cluster.yml` | NC4as_T4_v3 cluster, min=0/max=1, 120s idle scale-down — **already written** |
+| `aml/environments/flight-delay-prod.yml` + `Dockerfile` | PyTorch 2.1+cu118, PyG 2.4, matching CUDA wheels — **already written** |
+| `aml/jobs/train_job.yml` | CLI v2 job YAML; mounts OneLake historical + live_feed; registers output to model registry — **already written** |
+
+### Config & APIM
+
+| Path | Purpose |
+|---|---|
+| `configs/production.yaml` | Production training config — **already written** |
+| `apim/api_definition.yaml` | OpenAPI 3.0 spec for predictions API; `GET /predictions` with airport + horizon params |
+
+### Deployment
+
+| Path | Purpose |
+|---|---|
+| `deploy/bootstrap.sh` | One-time setup script — **already written**, covers AzureML + OneLake upload |
+| `deploy/prep_inference_checkpoint.py` | Strip optimizer state from checkpoint — **already written** |
+
+### Power BI
+
+| Path | Purpose |
+|---|---|
+| `powerbi/flight_delay_dashboard.pbix` | Page 1: Azure Maps heatmap. Page 2: Per-airport 5-horizon bar chart, 15-min reference line |
+
+---
+
+## Files Already Modified (Done)
+
+| File | Change |
+|---|---|
+| `src/utils/io.py` | Added `load_checkpoint_inference_only()` with `weights_only=True` |
+| `src/data/graph_builder.py` | Added `__all__`; `build_graph_dataset` now returns 3-tuple `(graphs, airport_map, norm_stats)` |
+| `scripts/train.py` | Saves `airport_map.json`, `feature_stats.pt`, `metadata.json` automatically after GNN training |
+| `scripts/evaluate.py` | Updated to unpack 3-tuple from `build_graph_dataset` |
+| `pyproject.toml` | Added `[deploy]` optional extra for Azure SDK deps |
+
+---
+
+## Pipeline Details
+
+### pl_fake_ingestion — Web Activity calling GetFlightData
+
+```
+Trigger: every hour at :05 UTC
+Timeout: 20 minutes
+On failure: alert + leave live_feed unchanged (inference will reuse last hour)
+
+Activity: WebActivity "call_flight_data_api"
+  Method: POST
+  URL: https://<function-app>.azurewebsites.net/api/v1/flights/ingest
+  Headers: { "x-functions-key": "@{linkedService().functionKey}" }
+  Body: { "timestamp": "@{formatDateTime(pipeline().TriggerTime, 'yyyy-MM-ddTHH:00:00Z')}" }
+
+On success: check response body status == "ok"
+  → pipeline succeeds, inference pipeline can proceed
+On failure / status != "ok":
+  → pipeline fails, alert fires, last hour's data remains in rolling_buffer
+```
+
+### GetFlightData Function Logic
+
+```python
+# POST /v1/flights/ingest?timestamp=2026-05-19T14:00:00Z
+# (or timestamp in request body JSON)
+
+now_ts   = parse_timestamp(request)          # e.g. 2026-05-19T14:00:00Z
+equiv_dt = now_ts.replace(year=2022)         # → 2022-05-19T14:00:00Z
+
+# Read from OneLake via ADLS Gen2 + Managed Identity
+credential = DefaultAzureCredential()
+fs = adlfs.AzureBlobFileSystem(account_name=ONELAKE_ACCOUNT, credential=credential)
+
+table_b = pq.read_table(SOURCE_PARQUET, filesystem=fs, filters=[
+    ("Month", "=", equiv_dt.month),
+    ("DayofMonth", "=", equiv_dt.day),
+    ("CRSDepTime", ">=", equiv_dt.hour * 100),
+    ("CRSDepTime", "<",  (equiv_dt.hour + 1) * 100),
+], columns=CLASS_B_COLS)
+
+# Write class_b, class_a schedule (+8h), rolling_buffer to OneLake
+# Trim rolling_buffer partitions older than 168 hours
+# Return: {"status": "ok", "rows_ingested": 2314, "timestamp": "...", "equivalent_2022": "..."}
+```
+
+### pl_hourly_predict Logic (nb_inference.ipynb)
+
+Python kernel notebook (not Spark — PyTorch + PyG not available in Fabric Spark by default):
+
+1. Load last 6 class_b partitions + next-8h class_a partitions from rolling_buffer
+2. Call `clean_flights`, `fill_delay_nulls`, `encode_time` — **do NOT call `filter_top_airports`** (use frozen `airport_map.json`)
+3. Filter to `airport_map.keys()` only
+4. Call `create_temporal_graphs(df, airport_map, ...)` to build 6-snapshot sequence
+5. Apply frozen normalization stats (`feature_stats.pt`)
+6. `build_model(config, input_dim=55, edge_dim=5)` — config must have `loss: multi_task` to get `output_channels=3`
+7. `load_checkpoint_inference_only(checkpoint_path, model)` (safe, `weights_only=True`)
+8. `model.eval(); torch.no_grad(); preds = model(sequence)` → `[70, 5, 3]`; use channel 0 (ArrDelay)
+9. Write 70-row DataFrame to `predictions/latest` (overwrite) and `predictions/history` (append)
+
+### pl_monthly_retrain Logic
+
+```
+[1] nb_submit_aml_job      → submits train_job.yml via azure-ai-ml SDK
+[2] Until(poll every 5min) → waits for AzureML run completion (max 6h)
+[3] nb_champion_challenger → downloads challenger MAE, compares composite MAE
+                             if (champion_mae - challenger_mae) / champion_mae >= 0.02:
+                               atomic copy of .pt + airport_map.json + feature_stats.pt + metadata.json
+                               to models/champion/
+```
+
+### Backfill Flow (one-time, before first prediction)
+
+`nb_backfill_buffer` calls `GetFlightData` 168 times in a loop, once per hour going back 7 days. This means the backfill uses the same code path as the live pipeline — not a separate notebook that reads parquets directly. The rolling_buffer is fully populated before `pl_hourly_predict` is enabled.
+
+---
+
+## End Products
+
+### 1. Power BI Dashboard (DirectLake, hourly auto-update)
+- Page 1: Azure Maps visual — airport bubbles, color = mean predicted ArrDelay, size = scheduled departure count, horizon slicer
+- Page 2: Selected airport drill-down — 5-horizon grouped bar chart, 15-min delay threshold reference line
+
+### 2. Predictions REST API (Azure Functions App #2 + APIM)
+- `GET /predictions?airport=ATL&horizon=2`
+- Response: `{"airport":"ATL","horizon":2,"predicted_arr_delay_min":14.3,"prediction_ts":"2026-05-19T15:00Z"}`
+- APIM: 60 req/min rate limit, 55s response cache, OpenAPI schema
+
+### 3. Interactive Airport Map
+- Azure Maps custom visual in Power BI, color-encodes delay severity across all 70 airports
+- Clicking an airport opens the Page 2 drill-down
+
+---
+
+## Monthly Cost Estimate (East US, pay-as-you-go)
+
+| Service | SKU / Usage | Monthly Cost |
+|---|---|---|
+| Microsoft Fabric | F2 reserved capacity (OneLake, Data Factory, Notebooks, Power BI Premium) | ~$365 |
+| OneLake storage | ~100 GB LRS | ~$2 |
+| Azure ML compute | NC4as_T4_v3 × ~3h/month, scale-to-zero | ~$2 |
+| Function App #1 (GetFlightData) | Consumption, 720 calls/month, ~2s each | $0 (free tier) |
+| Function App #2 (GetFlightPredictions) | Consumption, ~5K calls/month | $0 (free tier) |
+| Function App storage accounts (×2) | 2 × ~1 GB LRS | ~$0.05 |
+| Azure API Management | Consumption tier, ~5K calls/month | $0 (free tier) |
+| Azure Monitor / misc | Basic logging, Key Vault | ~$3 |
+| **Total** | | **~$372/month** |
+
+**Cost reduction:** Fabric 60-day free trial → $0 for initial setup. F2 1-year reserved → ~$255/month.
+
+---
+
+## Technical Risks
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| **GetFlightData cold start + large parquet read** | High | 7 GB parquet on Consumption plan can take 5–15s on cold start. Pre-partition the 2022 parquet by month (12 files × ~600 MB) so filter pushdown only scans 1 file. Set Function timeout to 300s in host.json. |
+| **PyTorch not supported in Fabric Spark** | Critical | Use Python kernel notebooks (not Spark) for inference. Install PyTorch via Fabric custom environment YAML. |
+| **Lag feature bootstrap (cold start)** | High | Run `nb_backfill_buffer` (calls GetFlightData 168×) before enabling `pl_hourly_predict`. Set `WARM_UP` flag in predictions table when <24 buffer partitions exist. |
+| **Fixed airport_map must be frozen** | High | Save `airport_map.json` from training run. Inference notebook skips `filter_top_airports`; filters directly to frozen keys. |
+| **Normalization stats must travel with checkpoint** | High | Champion promotion copies all 4 artifacts atomically (`.pt`, `airport_map.json`, `feature_stats.pt`, `metadata.json`). |
+| **`output_channels=3` config dependency** | Medium | `configs/production.yaml` must specify `loss: multi_task`. Inference uses only channel 0 (ArrDelay). |
+| **Managed Identity RBAC on OneLake** | Medium | Function App's system-assigned MI needs `Storage Blob Data Contributor` on the Lakehouse ADLS Gen2 endpoint — grant this in Azure Portal before deploying. |
+| **`torch.load(weights_only=False)` deprecated** | Medium | Strip optimizer state at deploy time; inference notebook uses `load_checkpoint_inference_only` with `weights_only=True`. |
+| **Seq2SeqGNN forward() expects `list[Data]`** | Medium | Inference notebook must pass exactly 6 snapshots. If <6 hours available, skip inference and set `WARM_UP` flag. |
+
+---
+
+## Implementation Sequence
+
+| Phase | Status | Deliverable |
+|---|---|---|
+| **0a — Fabric Lakehouse** | ✅ Done | Lakehouse created |
+| **0b — Azure ML setup** | ⏳ Pending | Run steps 1–3 of `bootstrap.sh`: workspace, GPU cluster, environment Docker build (~20 min) |
+| **0c — Upload data** | ⏳ Pending (data downloading) | `Combined_Flights_2022.parquet` + 2018–2021 parquets in OneLake |
+| **0d — Checkpoint prep** | ⏳ Pending (needs trained model) | `prep_inference_checkpoint.py` → 4 champion artifacts uploaded to OneLake |
+| **1 — GetFlightData API** | ⏳ Pending | Azure Function deployed, RBAC granted, manual `POST /v1/flights/ingest` returns `status: ok` |
+| **2 — Ingestion pipeline** | ⏳ Pending | `pl_fake_ingestion` Web Activity enabled; `nb_backfill_buffer` run once; rolling_buffer populated |
+| **3 — Inference pipeline** | ⏳ Pending | `nb_inference` tested; `pl_hourly_predict` enabled; `predictions/latest` Delta table populated |
+| **4 — Power BI** | ⏳ Pending | DirectLake semantic model connected; Azure Maps visual + drill-down page published |
+| **5 — Predictions API** | ⏳ Pending | `GetFlightPredictions` Function + APIM deployed; `GET /predictions` returns JSON |
+| **6 — Retraining pipeline** | ⏳ Pending | Manual AzureML job verified; `pl_monthly_retrain` enabled |
+
+**Total remaining: ~9 engineering days**
+
+---
+
+## Verification
+
+1. **GetFlightData API**: `curl -X POST "https://<fn>.azurewebsites.net/api/v1/flights/ingest?timestamp=2026-05-19T14:00:00Z" -H "x-functions-key: <key>"` → `{"status":"ok","rows_ingested":~2000}`; check OneLake for `live_feed/class_b/2026/05/19/14/flights.parquet`
+2. **Ingestion pipeline**: After enabling `pl_fake_ingestion`, verify a new partition appears in `live_feed/rolling_buffer/` within 10 minutes past each hour
+3. **Backfill**: Run `nb_backfill_buffer` once; verify 168 partitions exist in `rolling_buffer/`
+4. **Inference**: After enabling `pl_hourly_predict`, check `predictions/latest` — exactly 70 rows, 5 prediction columns, updated within 15 min past each hour
+5. **Predictions API**: `curl "https://<apim-url>/predictions?airport=ATL&horizon=2"` → JSON with `predicted_arr_delay_min` between -10 and 120
+6. **Retraining**: Submit AzureML job manually; verify challenger checkpoint in `models/challenger/`; verify `nb_champion_challenger` promotes or rejects correctly
+7. **Power BI**: Map loads, bubbles colored, horizon slicer works, timestamp reflects last inference run
