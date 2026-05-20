@@ -10,7 +10,8 @@ Expected env vars:
 
 Query params:
     airport  – IATA code (e.g. ATL), case-insensitive
-    horizon  – integer 1–5 (hours ahead)
+    horizon  – hours ahead; must be one of {1, 2, 4, 6, 8}
+               (matches the model's prediction_horizons in production.yaml)
 
 Returns JSON:
     {"airport": "ATL", "horizon": 2, "predicted_arr_delay_min": 14.3,
@@ -27,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 WORKSPACE_ID   = os.environ["ONELAKE_WORKSPACE_ID"]
 LAKEHOUSE_ID   = os.environ["ONELAKE_LAKEHOUSE_ID"]
-VALID_HORIZONS = {1, 2, 3, 4, 5}
+# Actual hours ahead, matching configs/production.yaml graph.prediction_horizons.
+# Delta-table columns are named arr_delay_h{H} where H ∈ this set.
+VALID_HORIZONS = {1, 2, 4, 6, 8}
 
 
 def _table_uri() -> str:

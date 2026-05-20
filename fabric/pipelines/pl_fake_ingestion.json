@@ -8,7 +8,7 @@
         "type": "WebActivity",
         "dependsOn": [],
         "policy": {
-          "timeout": "0.00:05:00",
+          "timeout": "0.00:10:00",
           "retry": 1,
           "retryIntervalInSeconds": 60
         },

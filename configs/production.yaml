@@ -5,9 +5,10 @@
 # =============================================================================
 
 data:
-  # AzureML mounts these paths via the job spec inputs section.
-  raw_dir: /mnt/inputs/historical_data
-  live_feed_dir: /mnt/inputs/live_feed_data
+  # AzureML mounts inputs at non-deterministic paths; train_job.yml exports
+  # RAW_DIR / LIVE_FEED_DIR from ${{inputs.*}} and load_config expands them.
+  raw_dir: ${RAW_DIR}
+  live_feed_dir: ${LIVE_FEED_DIR}
   years: [2018, 2019, 2020, 2021]
   live_feed_years: [2022]
   processed_dir: /tmp/processed
