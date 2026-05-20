@@ -98,7 +98,7 @@ def main() -> int:
         ],
     )
     dt = time.perf_counter() - t0
-    print(f"  Filtered read in {dt:.2f}s → {len(table)} rows")
+    print(f"  Filtered read in {dt:.2f}s -> {len(table)} rows")
     if len(table):
         print(f"  Sample row: {table.to_pandas().iloc[0].to_dict()}")
     else:
