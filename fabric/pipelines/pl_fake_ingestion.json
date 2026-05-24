@@ -54,11 +54,11 @@
     "parameters": {
       "FunctionAppHostname": {
         "type": "string",
-        "defaultValue": "<replace-with-function-app-hostname e.g. flight-data-api-abc123.azurewebsites.net>"
+        "defaultValue": "func-flight-ingest.azurewebsites.net"
       },
       "FunctionKey": {
         "type": "string",
-        "defaultValue": "<replace-with-function-key-or-use-key-vault-reference>"
+        "defaultValue": "<paste-default-host-key-from-Portal>"
       }
     },
     "triggers": [
@@ -74,23 +74,21 @@
             },
             "timeZone": "UTC"
           },
-          "startTime": "<replace-with-start-datetime-UTC e.g. 2026-05-20T00:05:00Z>"
+          "startTime": "2026-05-21T00:05:00Z"
         }
       }
     ]
   },
   "_comments": {
     "setup_steps": [
-      "1. Deploy azure_functions/flight_data_api/ to an Azure Function App (Python 3.10, Consumption plan).",
-      "2. Set app settings: ONELAKE_WORKSPACE_ID, ONELAKE_LAKEHOUSE_ID, BUFFER_HOURS=168, SOURCE_YEAR=2022.",
-      "3. Enable system-assigned Managed Identity on the Function App.",
-      "4. Grant the Managed Identity 'Storage Blob Data Contributor' on the OneLake ADLS Gen2 endpoint.",
-      "5. Replace FunctionAppHostname default with your Function App hostname.",
-      "6. Replace FunctionKey default with a function-level key (or use Azure Key Vault reference).",
-      "7. Update startTime to a near-future UTC datetime.",
-      "8. Import this JSON into Fabric Data Factory via New Pipeline > Import.",
-      "9. Enable the trigger.",
-      "10. Before enabling pl_hourly_predict, run nb_backfill_buffer to pre-populate the rolling buffer."
+      "Prerequisites (already done in Phase 1): func-flight-ingest deployed in rg-tfm-flight; Managed Identity has Member access on TFM_Flight_Prediction workspace; cloud POST returns status: ok.",
+      "1. Get the default host key: Azure Portal → func-flight-ingest → Functions → App keys → default (host key) → copy.",
+      "2. In Fabric → TFM_Flight_Prediction → New → Data pipeline → 'pl_fake_ingestion'.",
+      "3. Reproduce the Web Activity from this JSON (Fabric does not support raw JSON import — use this file as a blueprint).",
+      "4. Override FunctionKey at pipeline run time, or store the key in a Fabric Variable Library / Azure Key Vault linked service.",
+      "5. Run nb_backfill_buffer FIRST to populate 168 partitions in live_feed/rolling_buffer/.",
+      "6. After backfill, enable the hourly :05 UTC trigger on this pipeline.",
+      "7. Verify within 70 minutes: a new partition appears in live_feed/rolling_buffer/YYYY/MM/DD/HH/."
     ]
   }
 }
