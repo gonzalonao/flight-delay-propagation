@@ -8,10 +8,21 @@
 
 ---
 
-## 🚦 Resume here (session handoff — last updated 2026-05-20)
+## 🚦 Resume here (session handoff — last updated 2026-05-24)
 
 **Working branch:** `claude/analyze-model-format-w89p1`
-**Current phase:** **Phase 1 complete.** Next is **Phase 2 — Ingestion pipeline + backfill**.
+**Current phase:** **Phase 2 in progress.** Mid-way through the Fabric portal manual steps.
+
+### Phase 2 progress (sub-steps)
+
+- ✅ `nb_backfill_buffer.ipynb` hostname filled in (`func-flight-ingest.azurewebsites.net`); FUNCTION_KEY is a paste-placeholder
+- ✅ `pl_fake_ingestion.json` hostname + startTime filled in; FunctionKey is a paste-placeholder; setup_steps comment rewritten to reflect Phase 1 done
+- ⏳ **Step 1**: Copy default host key from Azure Portal → `func-flight-ingest` → App keys → default
+- ⏳ **Step 2**: Import notebook into Fabric workspace, paste key into cell 2, run all 168 calls
+- ⏳ **Step 3**: Verify 168 partitions in `Files/live_feed/rolling_buffer/`
+- ⏳ **Step 4 — IN PROGRESS**: Create `pl_fake_ingestion` pipeline in Fabric Data Factory via UI (Fabric does **not** import ADF JSON — the JSON file is a blueprint to click-through). Web Activity name `call_flight_data_api`, POST to `https://func-flight-ingest.azurewebsites.net/api/v1/flights/ingest`, headers `x-functions-key` + `Content-Type: application/json`, body `@concat('{"timestamp": "', formatDateTime(pipeline().TriggerTime, 'yyyy-MM-ddTHH:00:00Z'), '"}')`, timeout 10 min, retry 1×60s. Optional If Condition checking `output.status == 'ok'`.
+- ⏳ **Step 5**: Enable schedule trigger — hourly at `:05` UTC
+- ⏳ **Step 6**: Verify a new partition lands after next `:05` UTC mark
 
 ### What's done
 
