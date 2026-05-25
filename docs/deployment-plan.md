@@ -15,7 +15,7 @@
 
 ### Phase 3 steps (in order)
 
-- ⏳ **Step 1**: Build project wheel locally:
+- ✅ **Step 1**: Build project wheel locally:
   ```
   cd C:\Users\gonza\dev\flight-delay-propagation
   pip install build
@@ -23,22 +23,22 @@
   ```
   Output: `dist/flight_delay_propagation-0.1.0-py3-none-any.whl`
 
-- ⏳ **Step 2**: Upload wheel to OneLake — Fabric portal → `FlightData_Lakehouse` → Files → create folder `packages/` → upload the `.whl` file.
+- ✅ **Step 2**: Upload wheel to OneLake — Fabric portal → `FlightData_Lakehouse` → Files → create folder `packages/` → upload the `.whl` file.
 
-- ⏳ **Step 3**: Create Fabric custom environment `env_inference` — Fabric workspace → New item → Environment. Add libraries: `torch>=2.1`, `torch-geometric>=2.4`, `pyarrow>=14`, `azure-storage-file-datalake>=12`, `azure-identity>=1.15`, `deltalake>=0.14`. Publish the environment (takes ~10 min).
+- ✅ **Step 3**: Create Fabric custom environment `env_inference` — Fabric workspace → New item → Environment. Add libraries: `torch>=2.1`, `torch-geometric>=2.4`, `pyarrow>=14`, `azure-storage-file-datalake>=12`, `azure-identity>=1.15`, `deltalake>=0.14`. Publish the environment (takes ~10 min). *(deltalake no longer used at runtime — Spark `saveAsTable` writes the Delta tables; lib can stay or be dropped on next env rebuild.)*
 
-- ⏳ **Step 4**: Import `fabric/notebooks/nb_inference.ipynb` into `TFM_Flight_Prediction` workspace → New item → Import notebook.
+- ✅ **Step 4**: Import `fabric/notebooks/nb_inference.ipynb` into `TFM_Flight_Prediction` workspace → New item → Import notebook.
 
-- ⏳ **Step 5**: In the notebook settings — attach to `env_inference` environment + add `FlightData_Lakehouse` as the default lakehouse.
+- ✅ **Step 5**: In the notebook settings — attach to `env_inference` environment + add `FlightData_Lakehouse` as the default lakehouse.
 
-- ⏳ **Step 6**: Run `nb_inference.ipynb` manually (Run all). Verify:
+- ✅ **Step 6**: Run `nb_inference.ipynb` manually (Run all). Verified 2026-05-25:
   - Cell 13 prints `350 rows` in `predictions_latest` (70 airports × 5 horizons)
   - `airport_code` has 70 distinct values
-  - `predicted_arr_delay_min` values are in a plausible range (−30 to +120 minutes)
+  - `predicted_arr_delay_min` values in a plausible range
 
-- ⏳ **Step 7**: Create `pl_hourly_predict` pipeline in Fabric Data Factory — single Notebook Activity pointing at `nb_inference`, timeout 20 min, no retry.
+- ⏳ **Step 7** *(in progress)*: Create `pl_hourly_predict` pipeline in Fabric Data Factory — single Notebook Activity pointing at `nb_inference`, timeout 20 min, no retry.
 
-- ⏳ **Step 8**: Add schedule trigger `hourly_at_15` — Fixed, hourly, at minute `:15` UTC, start `2026-05-25T00:15:00Z`. **Enable only after Step 6 manual run passes.**
+- ⏳ **Step 8**: Add schedule trigger `hourly_at_15` — Fixed, hourly, at minute `:15` UTC, start `2026-05-25T00:15:00Z`. **Enable only after two consecutive manual runs of `pl_hourly_predict` pass.**
 
 ### Phase 2 — DONE ✅
 
@@ -412,7 +412,7 @@ down the F2 capacity (the Lakehouse data persists in storage either way).
 | **0d — Checkpoint prep** | ⏳ Pending | `extract_artifacts.py` → `prep_inference_checkpoint.py` → 4 champion artifacts uploaded to OneLake |
 | **1 — GetFlightData API** | ✅ Done | `func-flight-ingest` deployed, Managed Identity granted, cloud POST returns `status: ok` |
 | **2 — Ingestion pipeline** | ✅ Done | `pl_fake_ingestion` live at `:05` UTC; 168-partition backfill verified; rolling_buffer populated |
-| **3 — Inference pipeline** | ⏳ In progress | `nb_inference` written; wheel + env setup pending; `pl_hourly_predict` not yet created |
+| **3 — Inference pipeline** | ⏳ In progress | `nb_inference` runs end-to-end in Fabric (350 rows in `predictions_latest`); `pl_hourly_predict` pipeline + schedule pending |
 | **4 — Power BI** | ⏳ Pending | DirectLake semantic model connected; Azure Maps visual + drill-down page published |
 | **5 — Predictions API** | ⏳ Pending | `GetFlightPredictions` Function + APIM deployed; `GET /predictions` returns JSON |
 | **6 — Retraining pipeline** | 📄 Scaffolding only | `aml/`, `nb_submit_aml_job`, `nb_champion_challenger`, `pl_monthly_retrain` exist as code but are **not** deployed or triggered. Defended at the thesis as the production-extension path. |
