@@ -10,8 +10,12 @@
 
 ## 🚦 Resume here (session handoff — last updated 2026-05-25)
 
-**Working branch:** `claude/analyze-model-format-w89p1`
-**Current phase:** **Phase 3 — Inference pipeline.**
+**Working branch:** `feat/phase4-powerbi`
+**Current phase:** **Phase 4 — Power BI dashboard.**
+
+### Phase 3 — DONE ✅
+
+All 8 steps verified 2026-05-25. `pl_hourly_predict` running on the `hourly_at_15` schedule; `predictions_latest` refreshes every hour at `:15` UTC with 350 rows; `predictions_history` appends 350 rows/run.
 
 ### Phase 3 steps (in order)
 
@@ -38,7 +42,7 @@
 
 - ✅ **Step 7**: Created `pl_hourly_predict` pipeline in Fabric Data Factory — single Notebook Activity pointing at `nb_inference`, timeout 20 min, no retry. Two consecutive manual runs verified.
 
-- ⏳ **Step 8** *(in progress)*: Add schedule trigger `hourly_at_15` — Fixed, hourly, at minute `:15` UTC, start `2026-05-25T00:15:00Z`. Two-run manual gate satisfied; safe to enable.
+- ✅ **Step 8**: `hourly_at_15` schedule trigger enabled — Fixed, hourly, minute `:15` UTC. Two consecutive scheduled runs verified.
 
 ### Phase 2 — DONE ✅
 
@@ -412,8 +416,8 @@ down the F2 capacity (the Lakehouse data persists in storage either way).
 | **0d — Checkpoint prep** | ⏳ Pending | `extract_artifacts.py` → `prep_inference_checkpoint.py` → 4 champion artifacts uploaded to OneLake |
 | **1 — GetFlightData API** | ✅ Done | `func-flight-ingest` deployed, Managed Identity granted, cloud POST returns `status: ok` |
 | **2 — Ingestion pipeline** | ✅ Done | `pl_fake_ingestion` live at `:05` UTC; 168-partition backfill verified; rolling_buffer populated |
-| **3 — Inference pipeline** | ⏳ In progress | `nb_inference` runs end-to-end in Fabric (350 rows in `predictions_latest`); `pl_hourly_predict` pipeline + schedule pending |
-| **4 — Power BI** | ⏳ Pending | DirectLake semantic model connected; Azure Maps visual + drill-down page published |
+| **3 — Inference pipeline** | ✅ Done | `nb_inference` runs hourly via `pl_hourly_predict` on `hourly_at_15` schedule; 350 rows refresh in `predictions_latest`, 350 append to `predictions_history` per run |
+| **4 — Power BI** | ⏳ In progress | DirectLake semantic model from `FlightData_Lakehouse`; Azure Maps visual + per-airport drill-down page |
 | **5 — Predictions API** | ⏳ Pending | `GetFlightPredictions` Function + APIM deployed; `GET /predictions` returns JSON |
 | **6 — Retraining pipeline** | 📄 Scaffolding only | `aml/`, `nb_submit_aml_job`, `nb_champion_challenger`, `pl_monthly_retrain` exist as code but are **not** deployed or triggered. Defended at the thesis as the production-extension path. |
 
