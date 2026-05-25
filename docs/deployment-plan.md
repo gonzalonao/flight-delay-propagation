@@ -8,21 +8,48 @@
 
 ---
 
-## 🚦 Resume here (session handoff — last updated 2026-05-24)
+## 🚦 Resume here (session handoff — last updated 2026-05-25)
 
 **Working branch:** `claude/analyze-model-format-w89p1`
-**Current phase:** **Phase 2 in progress.** Mid-way through the Fabric portal manual steps.
+**Current phase:** **Phase 3 — Inference pipeline.**
 
-### Phase 2 progress (sub-steps)
+### Phase 3 steps (in order)
 
-- ✅ `nb_backfill_buffer.ipynb` hostname filled in (`func-flight-ingest.azurewebsites.net`); FUNCTION_KEY is a paste-placeholder
-- ✅ `pl_fake_ingestion.json` hostname + startTime filled in; FunctionKey is a paste-placeholder; setup_steps comment rewritten to reflect Phase 1 done
-- ⏳ **Step 1**: Copy default host key from Azure Portal → `func-flight-ingest` → App keys → default
-- ⏳ **Step 2**: Import notebook into Fabric workspace, paste key into cell 2, run all 168 calls
-- ⏳ **Step 3**: Verify 168 partitions in `Files/live_feed/rolling_buffer/`
-- ⏳ **Step 4 — IN PROGRESS**: Create `pl_fake_ingestion` pipeline in Fabric Data Factory via UI (Fabric does **not** import ADF JSON — the JSON file is a blueprint to click-through). Web Activity name `call_flight_data_api`, POST to `https://func-flight-ingest.azurewebsites.net/api/v1/flights/ingest`, headers `x-functions-key` + `Content-Type: application/json`, body `@concat('{"timestamp": "', formatDateTime(pipeline().TriggerTime, 'yyyy-MM-ddTHH:00:00Z'), '"}')`, timeout 10 min, retry 1×60s. Optional If Condition checking `output.status == 'ok'`.
-- ⏳ **Step 5**: Enable schedule trigger — hourly at `:05` UTC
-- ⏳ **Step 6**: Verify a new partition lands after next `:05` UTC mark
+- ⏳ **Step 1**: Build project wheel locally:
+  ```
+  cd C:\Users\gonza\dev\flight-delay-propagation
+  pip install build
+  python -m build --wheel
+  ```
+  Output: `dist/flight_delay_propagation-0.1.0-py3-none-any.whl`
+
+- ⏳ **Step 2**: Upload wheel to OneLake — Fabric portal → `FlightData_Lakehouse` → Files → create folder `packages/` → upload the `.whl` file.
+
+- ⏳ **Step 3**: Create Fabric custom environment `env_inference` — Fabric workspace → New item → Environment. Add libraries: `torch>=2.1`, `torch-geometric>=2.4`, `pyarrow>=14`, `azure-storage-file-datalake>=12`, `azure-identity>=1.15`, `deltalake>=0.14`. Publish the environment (takes ~10 min).
+
+- ⏳ **Step 4**: Import `fabric/notebooks/nb_inference.ipynb` into `TFM_Flight_Prediction` workspace → New item → Import notebook.
+
+- ⏳ **Step 5**: In the notebook settings — attach to `env_inference` environment + add `FlightData_Lakehouse` as the default lakehouse.
+
+- ⏳ **Step 6**: Run `nb_inference.ipynb` manually (Run all). Verify:
+  - Cell 13 prints `350 rows` in `predictions_latest` (70 airports × 5 horizons)
+  - `airport_code` has 70 distinct values
+  - `predicted_arr_delay_min` values are in a plausible range (−30 to +120 minutes)
+
+- ⏳ **Step 7**: Create `pl_hourly_predict` pipeline in Fabric Data Factory — single Notebook Activity pointing at `nb_inference`, timeout 20 min, no retry.
+
+- ⏳ **Step 8**: Add schedule trigger `hourly_at_15` — Fixed, hourly, at minute `:15` UTC, start `2026-05-25T00:15:00Z`. **Enable only after Step 6 manual run passes.**
+
+### Phase 2 — DONE ✅
+
+- ✅ `nb_backfill_buffer.ipynb` hostname filled in; FUNCTION_KEY pasted at runtime
+- ✅ `pl_fake_ingestion.json` hostname + startTime filled in; blueprint committed
+- ✅ **Step 1**: Default host key copied from Azure Portal
+- ✅ **Step 2**: `nb_backfill_buffer` run — 168 calls completed
+- ✅ **Step 3**: 168 partitions verified in `Files/live_feed/rolling_buffer/`
+- ✅ **Step 4**: `pl_fake_ingestion` created in Fabric Data Factory UI (Web Activity + If Condition + HTTP connection `conn_flight_ingest_api`)
+- ✅ **Step 5**: Schedule trigger `hourly_at_05` enabled (Fixed, hourly, minute=5, UTC)
+- ✅ **Step 6**: Partition verified in `live_feed/rolling_buffer/` within 10 min of `:05` UTC
 
 ### What's done
 
@@ -384,8 +411,8 @@ down the F2 capacity (the Lakehouse data persists in storage either way).
 | **0c — Upload data** | ⏳ Pending | `Combined_Flights_2022.parquet` (only) in OneLake — 2018–2021 not needed since we never retrain |
 | **0d — Checkpoint prep** | ⏳ Pending | `extract_artifacts.py` → `prep_inference_checkpoint.py` → 4 champion artifacts uploaded to OneLake |
 | **1 — GetFlightData API** | ✅ Done | `func-flight-ingest` deployed, Managed Identity granted, cloud POST returns `status: ok` |
-| **2 — Ingestion pipeline** | ⏳ Pending | `pl_fake_ingestion` Web Activity enabled; `nb_backfill_buffer` run once; rolling_buffer populated |
-| **3 — Inference pipeline** | ⏳ Pending | `nb_inference` tested; `pl_hourly_predict` enabled; `predictions/latest` Delta table populated |
+| **2 — Ingestion pipeline** | ✅ Done | `pl_fake_ingestion` live at `:05` UTC; 168-partition backfill verified; rolling_buffer populated |
+| **3 — Inference pipeline** | ⏳ In progress | `nb_inference` written; wheel + env setup pending; `pl_hourly_predict` not yet created |
 | **4 — Power BI** | ⏳ Pending | DirectLake semantic model connected; Azure Maps visual + drill-down page published |
 | **5 — Predictions API** | ⏳ Pending | `GetFlightPredictions` Function + APIM deployed; `GET /predictions` returns JSON |
 | **6 — Retraining pipeline** | 📄 Scaffolding only | `aml/`, `nb_submit_aml_job`, `nb_champion_challenger`, `pl_monthly_retrain` exist as code but are **not** deployed or triggered. Defended at the thesis as the production-extension path. |
