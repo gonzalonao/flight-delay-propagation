@@ -36,9 +36,9 @@
   - `airport_code` has 70 distinct values
   - `predicted_arr_delay_min` values in a plausible range
 
-- ✅ **Step 7**: Created `pl_hourly_predict` pipeline in Fabric Data Factory — single Notebook Activity pointing at `nb_inference`, timeout 20 min, no retry. Two consecutive manual runs verified.
+- ⏳ **Step 7** *(in progress)*: Create `pl_hourly_predict` pipeline in Fabric Data Factory — single Notebook Activity pointing at `nb_inference`, timeout 20 min, no retry.
 
-- ⏳ **Step 8** *(in progress)*: Add schedule trigger `hourly_at_15` — Fixed, hourly, at minute `:15` UTC, start `2026-05-25T00:15:00Z`. Two-run manual gate satisfied; safe to enable.
+- ⏳ **Step 8**: Add schedule trigger `hourly_at_15` — Fixed, hourly, at minute `:15` UTC, start `2026-05-25T00:15:00Z`. **Enable only after two consecutive manual runs of `pl_hourly_predict` pass.**
 
 ### Phase 2 — DONE ✅
 
