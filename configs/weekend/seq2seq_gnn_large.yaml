@@ -75,6 +75,7 @@ graph:
   input_window: 6
   prediction_horizons: [1, 2, 4, 6, 8]
   normalize_features: true
+  cache_dir: data/processed/snapshots
 
 weather:
   enabled: true
@@ -95,6 +96,7 @@ model:
     dropout: 0.3
 
 training:
+  device: cuda
   epochs: 100
   batch_size: 512
   learning_rate: 0.0005
