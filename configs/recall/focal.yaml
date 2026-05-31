@@ -1,0 +1,19 @@
+# =============================================================================
+# Phase 3 — Focal BCE sobre el head clasificador (sólo si Phase 2 se queda
+# corto). Se fusiona sobre configs/recall/default.yaml.
+#
+#   python scripts/train.py --config configs/recall/focal.yaml
+#
+# La modulación focal (1 - p_t)**gamma concentra el gradiente en los positivos
+# difíciles (raros), complementando bce_pos_weight. alpha balancea clases en el
+# término focal. Se combina con el reweight de Phase 2 (bce_weight 1.0,
+# bce_pos_weight 3.0) para atacar el desbalance desde dos frentes.
+# =============================================================================
+
+training:
+  delay_weight: 3.5
+  multi_task:
+    bce_weight: 1.0
+    bce_pos_weight: 3.0
+    bce_focal_gamma: 2.0
+    bce_focal_alpha: 0.75

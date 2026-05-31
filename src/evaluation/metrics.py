@@ -114,23 +114,38 @@ def compute_all_metrics(
 
 
 def compute_classification_metrics(
-    predictions: np.ndarray, targets: np.ndarray, threshold: float = 15.0
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    pred_threshold: float = 15.0,
+    label_threshold: float | None = None,
 ) -> dict[str, float]:
     """Calcula métricas de clasificación binaria derivadas de regresión.
 
-    Convierte predicciones y targets continuos (minutos de retraso)
-    a clases binarias usando un umbral de retraso.
+    Convierte predicciones y targets continuos (minutos de retraso) a clases
+    binarias. El **label** se binariza con ``label_threshold`` (la verdad de
+    negocio: ArrDelay ≥ 15 min) y la **predicción** con ``pred_threshold`` (el
+    *punto de operación* del regresor, ajustable). Desacoplarlos permite subir
+    recall bajando ``pred_threshold`` sin redefinir qué cuenta como retraso
+    real — un ajuste de operating-point estándar, no un cambio de problema.
+
+    Si ``label_threshold`` es ``None`` se iguala a ``pred_threshold``, lo que
+    reproduce el comportamiento histórico (un único umbral para ambos lados).
 
     Args:
         predictions: Predicciones continuas (minutos de retraso).
         targets: Valores reales continuos (minutos de retraso).
-        threshold: Umbral en minutos para considerar "retrasado".
+        pred_threshold: Umbral aplicado a la predicción (operating-point).
+        label_threshold: Umbral que define el positivo real. ``None`` ⇒
+            igual a ``pred_threshold`` (compatibilidad hacia atrás).
 
     Returns:
         Diccionario con accuracy, precision, recall, f1.
     """
-    pred_labels = (predictions >= threshold).astype(int)
-    target_labels = (targets >= threshold).astype(int)
+    if label_threshold is None:
+        label_threshold = pred_threshold
+
+    pred_labels = (predictions >= pred_threshold).astype(int)
+    target_labels = (targets >= label_threshold).astype(int)
 
     tp = np.sum((pred_labels == 1) & (target_labels == 1))
     fp = np.sum((pred_labels == 1) & (target_labels == 0))
@@ -199,12 +214,114 @@ def compute_bce_classification_metrics(
     }
 
 
+def compute_classification_sweep(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    pred_thresholds: np.ndarray,
+    label_threshold: float = 15.0,
+) -> list[dict[str, float]]:
+    """Barre umbrales de predicción y devuelve P/R/F1 por umbral.
+
+    El label se mantiene fijo en ``label_threshold`` (verdad de negocio); sólo
+    se mueve el umbral aplicado a la predicción. Útil para elegir el punto de
+    operación que maximiza recall a una precisión mínima (ver
+    ``pick_pred_threshold``).
+
+    Args:
+        predictions: Predicciones continuas (minutos).
+        targets: Valores reales continuos (minutos).
+        pred_thresholds: Umbrales de predicción a evaluar.
+        label_threshold: Umbral fijo que define el positivo real.
+
+    Returns:
+        Lista de dicts ``{"pred_threshold", "precision", "recall", "f1",
+        "accuracy"}`` en el mismo orden que ``pred_thresholds``.
+    """
+    rows: list[dict[str, float]] = []
+    for t in pred_thresholds:
+        m = compute_classification_metrics(
+            predictions, targets,
+            pred_threshold=float(t), label_threshold=label_threshold,
+        )
+        rows.append({"pred_threshold": float(t), **m})
+    return rows
+
+
+def pick_pred_threshold(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    candidate_thresholds: np.ndarray,
+    min_precision: float = 0.55,
+    label_threshold: float = 15.0,
+) -> tuple[float, dict[str, float]]:
+    """Elige el umbral de predicción que maximiza recall con un piso de precisión.
+
+    Pensado para ajustar el punto de operación **en validación** y luego
+    reportarlo en test. Entre los umbrales cuya precisión ≥ ``min_precision``
+    devuelve el de mayor recall (desempata por F1). Si ninguno alcanza el piso,
+    cae al umbral de mayor F1 (para no devolver un operating-point degenerado).
+
+    Args:
+        predictions: Predicciones continuas de validación.
+        targets: Valores reales de validación.
+        candidate_thresholds: Rejilla de umbrales candidatos.
+        min_precision: Precisión mínima aceptable.
+        label_threshold: Umbral fijo que define el positivo real.
+
+    Returns:
+        ``(best_threshold, metrics_at_best)``.
+    """
+    sweep = compute_classification_sweep(
+        predictions, targets, candidate_thresholds, label_threshold,
+    )
+    feasible = [r for r in sweep if r["precision"] >= min_precision]
+    pool = feasible if feasible else sweep
+    best = max(pool, key=lambda r: (r["recall"], r["f1"]))
+    return best["pred_threshold"], best
+
+
+def compute_bce_sweep(
+    pct_logits: np.ndarray,
+    pct_targets: np.ndarray,
+    bce_thresholds: np.ndarray,
+    target_threshold: float = 0.5,
+) -> list[dict[str, float]]:
+    """Barre umbrales de probabilidad del head BCE y devuelve P/R/F1 por umbral."""
+    rows: list[dict[str, float]] = []
+    for b in bce_thresholds:
+        m = compute_bce_classification_metrics(
+            pct_logits, pct_targets,
+            bce_threshold=float(b), target_threshold=target_threshold,
+        )
+        rows.append({"bce_threshold": float(b), **m})
+    return rows
+
+
+def pick_bce_threshold(
+    pct_logits: np.ndarray,
+    pct_targets: np.ndarray,
+    candidate_thresholds: np.ndarray,
+    min_precision: float = 0.55,
+    target_threshold: float = 0.5,
+) -> tuple[float, dict[str, float]]:
+    """Análogo de ``pick_pred_threshold`` para el head BCE (sobre probabilidad)."""
+    sweep = compute_bce_sweep(
+        pct_logits, pct_targets, candidate_thresholds, target_threshold,
+    )
+    feasible = [r for r in sweep if r["bce_precision"] >= min_precision]
+    pool = feasible if feasible else sweep
+    best = max(pool, key=lambda r: (r["bce_recall"], r["bce_f1"]))
+    return best["bce_threshold"], best
+
+
 def compute_unified_metrics(
     predictions: np.ndarray,
     targets: np.ndarray,
     delay_threshold: float = 15.0,
     pct_logits: np.ndarray | None = None,
     pct_targets: np.ndarray | None = None,
+    pred_threshold: float | None = None,
+    bce_threshold: float = 0.5,
 ) -> dict[str, float]:
     """Calcula métricas unificadas: regresión + clasificación derivada.
 
@@ -221,23 +338,33 @@ def compute_unified_metrics(
     Args:
         predictions: Predicciones continuas de ArrDelay (minutos).
         targets: Valores reales de ArrDelay (minutos).
-        delay_threshold: Umbral en minutos para clasificación derivada.
+        delay_threshold: Umbral que define el positivo real (label, min).
         pct_logits: Logits del canal pct_arr_delayed (opcional).
         pct_targets: Targets ∈ [0, 1] del canal pct (opcional).
+        pred_threshold: Punto de operación del regresor (min). ``None`` ⇒
+            igual a ``delay_threshold`` (comportamiento histórico). Bajarlo
+            sube recall sin redefinir el label.
+        bce_threshold: Umbral de probabilidad del head BCE (default 0.5).
 
     Returns:
         Diccionario con todas las métricas. Si los args ``pct_*`` están
         presentes incluye también ``bce_accuracy/precision/recall/f1``.
     """
+    if pred_threshold is None:
+        pred_threshold = delay_threshold
+
     regression = compute_all_metrics(predictions, targets)
     classification = compute_classification_metrics(
-        predictions, targets, threshold=delay_threshold
+        predictions, targets,
+        pred_threshold=pred_threshold, label_threshold=delay_threshold,
     )
     out = {**regression, **classification}
 
     if pct_logits is not None and pct_targets is not None:
         out.update(
-            compute_bce_classification_metrics(pct_logits, pct_targets)
+            compute_bce_classification_metrics(
+                pct_logits, pct_targets, bce_threshold=bce_threshold,
+            )
         )
 
     return out
@@ -250,6 +377,8 @@ def evaluate_multi_horizon_graph_model(
     device: torch.device,
     prediction_horizons: list[int],
     delay_threshold: float = 15.0,
+    pred_threshold: float | None = None,
+    bce_threshold: float = 0.5,
 ) -> dict[str, dict[str, float]]:
     """Evalúa un modelo GNN multi-horizonte sobre grafos temporales.
 
@@ -261,7 +390,10 @@ def evaluate_multi_horizon_graph_model(
         graphs: Lista de grafos PyG con targets [num_nodes, num_horizons].
         device: Dispositivo (cpu/cuda).
         prediction_horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
-        delay_threshold: Umbral en minutos para clasificación derivada.
+        delay_threshold: Umbral que define el positivo real (label, min).
+        pred_threshold: Operating-point del regresor (min); ``None`` ⇒
+            ``delay_threshold``.
+        bce_threshold: Umbral de probabilidad del head BCE (default 0.5).
 
     Returns:
         Diccionario con métricas por horizonte y promedio:
@@ -345,10 +477,12 @@ def evaluate_multi_horizon_graph_model(
             metrics_h = compute_unified_metrics(
                 preds_h, targets_h, delay_threshold,
                 pct_logits=pct_logits_h, pct_targets=pct_targets_h,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
         else:
             metrics_h = compute_unified_metrics(
                 preds_h, targets_h, delay_threshold,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
         result[f"horizon_{h}h"] = metrics_h
         all_metrics_for_avg.append(metrics_h)
@@ -365,33 +499,36 @@ def evaluate_multi_horizon_graph_model(
 
 
 @torch.no_grad()
-def evaluate_multi_horizon_sequence_model(
+def collect_sequence_predictions(
     model: torch.nn.Module,
     sequences: list[list[Data]],
     device: torch.device,
-    prediction_horizons: list[int],
-    delay_threshold: float = 15.0,
-) -> dict[str, dict[str, float]]:
-    """Evalúa un modelo de secuencias multi-horizonte (SpatioTemporalGNN).
+    num_horizons: int,
+) -> dict[str, object]:
+    """Forward único sobre cada secuencia → arrays crudos por horizonte.
 
-    Igual que ``evaluate_multi_horizon_graph_model`` pero opera sobre
-    secuencias de grafos en vez de grafos individuales. Los targets y la
-    máscara se toman del último grafo de cada secuencia.
+    Recolecta predicciones y targets (enmascarados con ``active_mask`` del
+    último grafo de cada secuencia) **sin** aplicar ningún umbral. Esto permite
+    barrer puntos de operación (``pred_threshold`` / ``bce_threshold``) en
+    memoria sin re-ejecutar el modelo — el caso de uso del sweep de Phase 1.
 
     Args:
-        model: Modelo que acepta ``list[Data]`` (ya en device).
-        sequences: Lista de secuencias, cada una es ``list[Data]``.
-        device: Dispositivo (cpu/cuda).
-        prediction_horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
-        delay_threshold: Umbral en minutos para clasificación derivada.
+        model: Modelo que acepta ``list[Data]``.
+        sequences: Lista de secuencias (cada una ``list[Data]``).
+        device: Dispositivo.
+        num_horizons: Número de horizontes que emite el modelo.
 
     Returns:
-        Diccionario con métricas por horizonte y promedio:
-        {"horizon_1h": {...}, ..., "average": {...}}
+        Dict con:
+          - ``arr_pred`` / ``arr_target``: ``list[np.ndarray]`` (uno por
+            horizonte, concatenado sobre todas las secuencias) del canal
+            ArrDelay.
+          - ``pct_logit`` / ``pct_target``: idem para el head BCE, o ``None``
+            si el modelo no emite el canal pct.
+          - ``has_pct``: bool.
+          - ``n_items``: nº de secuencias procesadas.
     """
     model.eval()
-    num_horizons = len(prediction_horizons)
-
     all_preds: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
     all_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
     all_pct_logits: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
@@ -399,7 +536,6 @@ def evaluate_multi_horizon_sequence_model(
     has_pct_head = False
 
     for sequence in sequences:
-        # Move each graph in the sequence to device
         seq_on_device = []
         for g in sequence:
             g_dev = g.clone()
@@ -446,33 +582,85 @@ def evaluate_multi_horizon_sequence_model(
                     targets_np[mask_np, h_idx, TARGET_CHANNEL_PCT_DELAYED]
                 )
 
-    if not all_preds[0]:
+    def _cat(rows: list[list[np.ndarray]]) -> list[np.ndarray]:
+        return [
+            np.concatenate(r) if r else np.array([], dtype=float) for r in rows
+        ]
+
+    return {
+        "arr_pred": _cat(all_preds),
+        "arr_target": _cat(all_targets),
+        "pct_logit": _cat(all_pct_logits) if has_pct_head else None,
+        "pct_target": _cat(all_pct_targets) if has_pct_head else None,
+        "has_pct": has_pct_head,
+        "n_items": len(sequences),
+    }
+
+
+@torch.no_grad()
+def evaluate_multi_horizon_sequence_model(
+    model: torch.nn.Module,
+    sequences: list[list[Data]],
+    device: torch.device,
+    prediction_horizons: list[int],
+    delay_threshold: float = 15.0,
+    pred_threshold: float | None = None,
+    bce_threshold: float = 0.5,
+) -> dict[str, dict[str, float]]:
+    """Evalúa un modelo de secuencias multi-horizonte (SpatioTemporalGNN).
+
+    Igual que ``evaluate_multi_horizon_graph_model`` pero opera sobre
+    secuencias de grafos en vez de grafos individuales. Los targets y la
+    máscara se toman del último grafo de cada secuencia. Reutiliza
+    ``collect_sequence_predictions`` para el forward.
+
+    Args:
+        model: Modelo que acepta ``list[Data]`` (ya en device).
+        sequences: Lista de secuencias, cada una es ``list[Data]``.
+        device: Dispositivo (cpu/cuda).
+        prediction_horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
+        delay_threshold: Umbral que define el positivo real (label, min).
+        pred_threshold: Operating-point del regresor (min); ``None`` ⇒
+            ``delay_threshold``.
+        bce_threshold: Umbral de probabilidad del head BCE (default 0.5).
+
+    Returns:
+        Diccionario con métricas por horizonte y promedio:
+        {"horizon_1h": {...}, ..., "average": {...}}
+    """
+    num_horizons = len(prediction_horizons)
+
+    if not sequences:
         empty = {
             "mae": 0.0, "rmse": 0.0, "mape": 0.0, "r2": 0.0,
             "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
         }
-        result = {}
-        for h in prediction_horizons:
-            result[f"horizon_{h}h"] = empty.copy()
+        result = {f"horizon_{h}h": empty.copy() for h in prediction_horizons}
         result["average"] = empty.copy()
         return result
+
+    collected = collect_sequence_predictions(
+        model, sequences, device, num_horizons,
+    )
+    has_pct_head = collected["has_pct"]
 
     result: dict[str, dict[str, float]] = {}
     all_metrics_for_avg: list[dict[str, float]] = []
 
     for h_idx, h in enumerate(prediction_horizons):
-        preds_h = np.concatenate(all_preds[h_idx])
-        targets_h = np.concatenate(all_targets[h_idx])
+        preds_h = collected["arr_pred"][h_idx]
+        targets_h = collected["arr_target"][h_idx]
         if has_pct_head:
-            pct_logits_h = np.concatenate(all_pct_logits[h_idx])
-            pct_targets_h = np.concatenate(all_pct_targets[h_idx])
             metrics_h = compute_unified_metrics(
                 preds_h, targets_h, delay_threshold,
-                pct_logits=pct_logits_h, pct_targets=pct_targets_h,
+                pct_logits=collected["pct_logit"][h_idx],
+                pct_targets=collected["pct_target"][h_idx],
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
         else:
             metrics_h = compute_unified_metrics(
                 preds_h, targets_h, delay_threshold,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
         result[f"horizon_{h}h"] = metrics_h
         all_metrics_for_avg.append(metrics_h)
@@ -493,6 +681,8 @@ def evaluate_graph_model(
     graphs: list[Data],
     device: torch.device,
     delay_threshold: float = 15.0,
+    pred_threshold: float | None = None,
+    bce_threshold: float = 0.5,
 ) -> dict[str, float]:
     """Evalúa un modelo GNN sobre una lista de grafos temporales.
 
@@ -536,7 +726,10 @@ def evaluate_graph_model(
     predictions = np.concatenate(all_predictions)
     targets = np.concatenate(all_targets)
 
-    return compute_unified_metrics(predictions, targets, delay_threshold)
+    return compute_unified_metrics(
+        predictions, targets, delay_threshold,
+        pred_threshold=pred_threshold, bce_threshold=bce_threshold,
+    )
 
 
 @torch.no_grad()
@@ -545,6 +738,8 @@ def evaluate_model(
     dataloader: torch.utils.data.DataLoader,
     device: torch.device,
     delay_threshold: float = 15.0,
+    pred_threshold: float | None = None,
+    bce_threshold: float = 0.5,
 ) -> dict[str, float]:
     """Evalúa un modelo tabular sobre un dataloader completo.
 
@@ -572,4 +767,7 @@ def evaluate_model(
     predictions = np.concatenate(all_predictions)
     targets = np.concatenate(all_targets)
 
-    return compute_unified_metrics(predictions, targets, delay_threshold)
+    return compute_unified_metrics(
+        predictions, targets, delay_threshold,
+        pred_threshold=pred_threshold, bce_threshold=bce_threshold,
+    )

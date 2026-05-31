@@ -187,6 +187,16 @@ class MultiTaskLoss(nn.Module):
             target binario está desbalanceado (mayoría de aeropuertos
             puntuales). ``None`` desactiva el rebalanceo. Si se da, se
             usa como ``pos_weight`` de ``BCEWithLogitsLoss``.
+        bce_focal_gamma: Si se da, aplica modulación focal a la BCE: cada
+            término se pondera por ``(1 - p_t)**gamma`` donde ``p_t`` es la
+            probabilidad asignada a la clase verdadera. Concentra el gradiente
+            en los positivos difíciles (raros) — complementa a
+            ``bce_pos_weight``. ``None`` ⇒ BCE estándar (sin cambio de
+            comportamiento). Valores típicos 1.5–2.0.
+        bce_focal_alpha: Balanceo focal opcional ∈ (0, 1): pondera positivos
+            por ``alpha`` y negativos por ``1 - alpha``. ``None`` ⇒ sin
+            balanceo de clase en el término focal. Sólo tiene efecto si
+            ``bce_focal_gamma`` está activo.
 
     Raises:
         ValueError: Si todos los pesos son cero (la pérdida sería trivialmente 0).
@@ -202,6 +212,8 @@ class MultiTaskLoss(nn.Module):
         horizon_weights: list[float] | None = None,
         huber_delta: float = 10.0,
         bce_pos_weight: float | None = None,
+        bce_focal_gamma: float | None = None,
+        bce_focal_alpha: float | None = None,
     ) -> None:
         super().__init__()
         if main_weight + aux_weight + bce_weight <= 0:
@@ -216,6 +228,12 @@ class MultiTaskLoss(nn.Module):
         self.delta = huber_delta
         self.threshold = high_delay_threshold
         self.high_weight = high_delay_weight
+        self.focal_gamma = (
+            float(bce_focal_gamma) if bce_focal_gamma is not None else None
+        )
+        self.focal_alpha = (
+            float(bce_focal_alpha) if bce_focal_alpha is not None else None
+        )
 
         if horizon_weights is not None:
             hw = torch.tensor(horizon_weights, dtype=torch.float32)
@@ -249,13 +267,33 @@ class MultiTaskLoss(nn.Module):
     def _weighted_bce(
         self, logits: torch.Tensor, target: torch.Tensor
     ) -> torch.Tensor:
-        """BCEWithLogits ponderado por horizonte (target ya es ∈ [0, 1])."""
+        """BCEWithLogits ponderado por horizonte (target ya es ∈ [0, 1]).
+
+        Con ``focal_gamma`` activo aplica la modulación focal
+        ``(1 - p_t)**gamma`` (y opcionalmente el balanceo ``alpha``) sobre el
+        término puntual antes de la ponderación por horizonte.
+        """
         pos_weight = (
             self.bce_pos_weight if self.bce_pos_weight is not None else None
         )
         err = F.binary_cross_entropy_with_logits(
             logits, target, reduction="none", pos_weight=pos_weight,
         )
+
+        if self.focal_gamma is not None:
+            # p_t = prob. asignada a la clase verdadera. Para targets blandos
+            # ∈ [0, 1] (fracción delayed) interpolamos: p_t = t·p + (1-t)·(1-p).
+            p = torch.sigmoid(logits)
+            p_t = target * p + (1.0 - target) * (1.0 - p)
+            focal = (1.0 - p_t).clamp(min=0.0, max=1.0) ** self.focal_gamma
+            if self.focal_alpha is not None:
+                alpha_t = (
+                    target * self.focal_alpha
+                    + (1.0 - target) * (1.0 - self.focal_alpha)
+                )
+                focal = focal * alpha_t
+            err = err * focal
+
         if self.horizon_weights is not None and target.dim() == 2:
             hw = self.horizon_weights.to(target.device)
             err = err * hw.unsqueeze(0)

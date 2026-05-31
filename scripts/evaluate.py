@@ -71,6 +71,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Generar gráficos de evaluación",
     )
+    parser.add_argument(
+        "--pred-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Operating-point del regresor en min (clasificación derivada). "
+            "Si se omite, usa evaluation.pred_threshold o el label (15). "
+            "Bajarlo sube recall a costa de precision; no redefine el label."
+        ),
+    )
+    parser.add_argument(
+        "--bce-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Umbral de probabilidad del head BCE (def evaluation.bce_threshold "
+            "o 0.5). Bajarlo sube bce_recall a costa de bce_precision."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -108,8 +127,24 @@ def main() -> None:
     device = select_device(config)
     is_multi_horizon = model_name in MULTI_HORIZON_MODELS
 
-    delay_threshold = config.get("evaluation", {}).get(
-        "delay_threshold_minutes", 15
+    eval_cfg = config.get("evaluation", {})
+    delay_threshold = eval_cfg.get("delay_threshold_minutes", 15)
+    # CLI override > config > default. pred_threshold None ⇒ = label (15).
+    pred_threshold = (
+        args.pred_threshold
+        if args.pred_threshold is not None
+        else eval_cfg.get("pred_threshold")
+    )
+    bce_threshold = (
+        args.bce_threshold
+        if args.bce_threshold is not None
+        else eval_cfg.get("bce_threshold", 0.5)
+    )
+    logger.info(
+        "Umbrales de evaluación: label=%s min, pred=%s min, bce=%.2f",
+        delay_threshold,
+        pred_threshold if pred_threshold is not None else delay_threshold,
+        bce_threshold,
     )
 
     if model_name in GRAPH_MODELS:
@@ -166,7 +201,8 @@ def main() -> None:
                 "prediction_horizons", [1, 2, 3, 4, 5]
             )
             metrics = evaluate_multi_horizon_sequence_model(
-                model, test_sequences, device, horizons, delay_threshold
+                model, test_sequences, device, horizons, delay_threshold,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
             log_multi_horizon_results(metrics, model_name, horizons, logger)
         elif is_multi_horizon:
@@ -174,12 +210,14 @@ def main() -> None:
                 "prediction_horizons", [1, 2, 3, 4, 5]
             )
             metrics = evaluate_multi_horizon_graph_model(
-                model, test_graphs, device, horizons, delay_threshold
+                model, test_graphs, device, horizons, delay_threshold,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
             log_multi_horizon_results(metrics, model_name, horizons, logger)
         else:
             metrics = evaluate_graph_model(
-                model, test_graphs, device, delay_threshold
+                model, test_graphs, device, delay_threshold,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
             log_test_results(metrics, model_name, logger)
 
@@ -210,7 +248,10 @@ def main() -> None:
             test_dataset, batch_size=batch_size, shuffle=False
         )
 
-        metrics = evaluate_model(model, test_loader, device, delay_threshold)
+        metrics = evaluate_model(
+            model, test_loader, device, delay_threshold,
+            pred_threshold=pred_threshold, bce_threshold=bce_threshold,
+        )
         log_test_results(metrics, model_name, logger)
 
     # --- Gráficos opcionales (solo modelos tabulares por ahora) ---

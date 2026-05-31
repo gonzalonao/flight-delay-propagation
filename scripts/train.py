@@ -175,18 +175,40 @@ def _build_criterion(config: dict) -> torch.nn.Module:
             horizon_weights=horizon_weights,
             huber_delta=delta,
             bce_pos_weight=mt_cfg.get("bce_pos_weight"),
+            bce_focal_gamma=mt_cfg.get("bce_focal_gamma"),
+            bce_focal_alpha=mt_cfg.get("bce_focal_alpha"),
         )
         logger.info(
             "Pérdida: MultiTask (main=%.2f, aux=%.2f, bce=%.2f, "
             "huber_delta=%.1f, umbral=%.0f min, peso_delay=%.1f, "
-            "horizon_weights=%s, bce_pos_weight=%s)",
+            "horizon_weights=%s, bce_pos_weight=%s, focal_gamma=%s, "
+            "focal_alpha=%s)",
             criterion.main_weight, criterion.aux_weight, criterion.bce_weight,
             delta, delay_threshold, delay_weight, horizon_weights,
-            mt_cfg.get("bce_pos_weight"),
+            mt_cfg.get("bce_pos_weight"), mt_cfg.get("bce_focal_gamma"),
+            mt_cfg.get("bce_focal_alpha"),
         )
         return criterion
 
     return torch.nn.MSELoss()
+
+
+def _eval_thresholds(config: dict) -> tuple[float, float | None, float]:
+    """Lee los umbrales de evaluación del config.
+
+    Returns ``(delay_threshold, pred_threshold, bce_threshold)``:
+      - ``delay_threshold`` (``evaluation.delay_threshold_minutes``, def 15):
+        define el positivo real (label).
+      - ``pred_threshold`` (``evaluation.pred_threshold``, def ``None``):
+        operating-point del regresor; ``None`` ⇒ igual al label.
+      - ``bce_threshold`` (``evaluation.bce_threshold``, def 0.5): umbral de
+        probabilidad del head BCE.
+    """
+    eval_cfg = config.get("evaluation", {})
+    delay_threshold = eval_cfg.get("delay_threshold_minutes", 15)
+    pred_threshold = eval_cfg.get("pred_threshold")
+    bce_threshold = eval_cfg.get("bce_threshold", 0.5)
+    return delay_threshold, pred_threshold, bce_threshold
 
 
 def _save_deployment_artifacts(
@@ -301,10 +323,11 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
         test_dataset = FlightDelayDataset(test_features, test_targets)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        delay_threshold = config.get("evaluation", {}).get(
-            "delay_threshold_minutes", 15
+        delay_threshold, pred_threshold, bce_threshold = _eval_thresholds(config)
+        metrics = evaluate_model(
+            model, test_loader, device, delay_threshold,
+            pred_threshold=pred_threshold, bce_threshold=bce_threshold,
         )
-        metrics = evaluate_model(model, test_loader, device, delay_threshold)
         log_test_results(metrics, config["model"]["name"], logger)
 
     logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
@@ -403,21 +426,21 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
     # Evaluación final sobre grafos de test
     test_graphs = graph_splits["test"]
     if test_graphs:
-        delay_threshold = config.get("evaluation", {}).get(
-            "delay_threshold_minutes", 15
-        )
+        delay_threshold, pred_threshold, bce_threshold = _eval_thresholds(config)
 
         if is_multi_horizon:
             horizons = config.get("graph", {}).get(
                 "prediction_horizons", [1, 2, 3, 4, 5]
             )
             metrics = evaluate_multi_horizon_graph_model(
-                model, test_graphs, device, horizons, delay_threshold
+                model, test_graphs, device, horizons, delay_threshold,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
             log_multi_horizon_results(metrics, model_name, horizons, logger)
         else:
             metrics = evaluate_graph_model(
-                model, test_graphs, device, delay_threshold
+                model, test_graphs, device, delay_threshold,
+                pred_threshold=pred_threshold, bce_threshold=bce_threshold,
             )
             log_test_results(metrics, model_name, logger)
 
@@ -525,14 +548,13 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         graph_splits["test"], input_window
     )
     if test_sequences:
-        delay_threshold = config.get("evaluation", {}).get(
-            "delay_threshold_minutes", 15
-        )
+        delay_threshold, pred_threshold, bce_threshold = _eval_thresholds(config)
         horizons = config.get("graph", {}).get(
             "prediction_horizons", [1, 2, 3, 4, 5]
         )
         metrics = evaluate_multi_horizon_sequence_model(
-            model, test_sequences, device, horizons, delay_threshold
+            model, test_sequences, device, horizons, delay_threshold,
+            pred_threshold=pred_threshold, bce_threshold=bce_threshold,
         )
         log_multi_horizon_results(metrics, model_name, horizons, logger)
 

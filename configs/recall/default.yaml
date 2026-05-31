@@ -1,0 +1,133 @@
+# =============================================================================
+# Base de los experimentos de recall (Phase 2/3) — copia self-contained del
+# weekend/seq2seq_gnn_large.yaml (hidden_dim 256, num_heads 8), que es la
+# arquitectura del checkpoint limpio 20260514-213242/seq2seq_gnn_large.pt.
+#
+# `load_config()` fusiona automáticamente este `default.yaml` (capa 1) bajo
+# cualquier `configs/recall/<variante>.yaml` (capa 2), así que las variantes
+# sólo declaran sus *deltas* sobre `training`. Ejecutar este archivo por sí
+# solo reproduce el baseline.
+#
+# NOTA: estos configs están escritos para Phase 2/3 pero NO se lanzan en esta
+# pasada (cada run ≈ 16 h). El usuario los lanza cuando quiera.
+# =============================================================================
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  years: [2018, 2019]
+  sample_frac: null
+  random_seed: 42
+  columns:
+    - FlightDate
+    - Airline
+    - Origin
+    - Dest
+    - CRSDepTime
+    - CRSArrTime
+    - CRSElapsedTime
+    - Distance
+    - Month
+    - DayOfWeek
+    - DayofMonth
+    - Cancelled
+    - Diverted
+    - DepTime
+    - ArrTime
+    - DepDelay
+    - ArrDelay
+    - DepDel15
+    - ArrDel15
+    - WheelsOff
+    - WheelsOn
+    - TaxiOut
+    - TaxiIn
+    - AirTime
+    - ActualElapsedTime
+    - CarrierDelay
+    - WeatherDelay
+    - NASDelay
+    - SecurityDelay
+    - LateAircraftDelay
+
+features:
+  target: ArrDelay
+  temporal:
+    - month
+    - day_of_week
+    - hour
+  categorical:
+    - Airline
+    - Origin
+    - Dest
+  numerical:
+    - Distance
+    - DepDelay
+    - AirTime
+
+split:
+  method: temporal
+  train_end: "2019-07-01"
+  val_end:   "2019-10-01"
+
+graph:
+  top_n_airports: 70
+  min_route_flights: 30
+  temporal_window_hours: 1
+  input_window: 6
+  prediction_horizons: [1, 2, 4, 6, 8]
+  normalize_features: true
+  cache_dir: data/processed/snapshots
+
+weather:
+  enabled: true
+  provider: open_meteo
+  cache_dir: data/processed/weather
+  params:
+    - wind
+    - precip_cloud
+    - category
+
+model:
+  name: seq2seq_gnn
+  seq2seq_gnn:
+    hidden_dim: 256
+    num_heads: 8
+    num_spatial_layers: 3
+    num_temporal_layers: 2
+    dropout: 0.3
+
+training:
+  device: cuda
+  # Phase-1 análisis: val_loss está dentro del ~2% de su valor final ya en la
+  # época ~70, así que 75 épocas ahorran ~4 h/run sin coste apreciable de
+  # calidad. Sube a 100 sólo para el modelo final.
+  epochs: 75
+  batch_size: 512
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  scheduler: cosine
+  patience: 25
+  gradient_clip: 1.0
+  num_workers: 4
+  loss: multi_task
+  huber_delta: 10.0
+  delay_weight: 2.0
+  horizon_weights: [3, 3, 4, 5, 5]
+  multi_task:
+    main_weight: 1.0
+    aux_weight: 0.3
+    bce_weight: 0.5
+    bce_pos_weight: null
+
+evaluation:
+  metrics: [mae, rmse, mape, r2]
+  delay_threshold_minutes: 15
+  # Punto de operación tras el sweep de Phase 1 (rellena con los t*/b* que
+  # devuelva scripts/sweep_thresholds.py; null ⇒ usa el label / 0.5).
+  pred_threshold: null
+  bce_threshold: 0.5
+
+reproducibility:
+  seed: 42
+  deterministic: true

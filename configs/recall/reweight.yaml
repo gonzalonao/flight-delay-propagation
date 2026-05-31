@@ -1,0 +1,23 @@
+# =============================================================================
+# Phase 2 — Reweight combinado hacia la clase retrasada (un solo retrain).
+# Se fusiona sobre configs/recall/default.yaml; sólo declara los deltas.
+#
+#   python scripts/train.py --config configs/recall/reweight.yaml
+#
+# Levers (todos legítimos, sin tocar features):
+#   - delay_weight 2.0 → 3.5  : WeightedHuber pondera más las muestras con
+#     |ArrDelay| >= 15, empujando la media del regresor hacia arriba en
+#     entradas retrasadas → más predicciones cruzan el umbral → +recall derivado.
+#   - bce_weight 0.5 → 1.0    : más gradiente al head clasificador.
+#   - bce_pos_weight null → 3 : ~ratio neg/pos para pct>=0.5; corrige el sesgo
+#     a precision del head BCE → +bce_recall. Barrer {2,4,6} si hace falta.
+#
+# Tras entrenar, re-aplicar el sweep de Phase 1 sobre el nuevo checkpoint y, si
+# convence, fijar evaluation.pred_threshold / bce_threshold aquí.
+# =============================================================================
+
+training:
+  delay_weight: 3.5
+  multi_task:
+    bce_weight: 1.0
+    bce_pos_weight: 3.0
