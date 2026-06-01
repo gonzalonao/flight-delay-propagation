@@ -54,7 +54,14 @@ F_AIRPORT = [
     "origin_dep_delay_1h", "origin_dep_delay_3h", "origin_dep_count_1h",
     "origin_dep_del15_rate_1h", "dest_arr_delay_1h", "dest_arr_delay_3h",
 ]
-CATEGORICAL_FEATURES = set(F_ROUTE + F_AIRLINE + ["inbound_status"])
+# Meteo point-in-time (las columnas las crea src.flight_level.weather.add_weather_asof).
+F_WEATHER = [
+    "orig_wind", "orig_gust", "orig_precip", "orig_cloud", "orig_wxcat",
+    "dest_wind", "dest_gust", "dest_precip", "dest_cloud", "dest_wxcat",
+]
+CATEGORICAL_FEATURES = set(
+    F_ROUTE + F_AIRLINE + ["inbound_status", "orig_wxcat", "dest_wxcat"]
+)
 TARGET = "ArrDelay"
 
 # Columnas del PROPIO vuelo que jamás pueden ser features (target / post-salida).
@@ -71,6 +78,7 @@ FEATURE_SETS = {
     "C_schedule_rotation": F_SCHEDULE + F_ROUTE + F_ROTATION,
     "D_schedule_airport": F_SCHEDULE + F_ROUTE + F_AIRPORT,
     "E_all": F_SCHEDULE + F_ROUTE + F_AIRLINE + F_ROTATION + F_AIRPORT,
+    "F_all_weather": F_SCHEDULE + F_ROUTE + F_AIRLINE + F_ROTATION + F_AIRPORT + F_WEATHER,
 }
 
 

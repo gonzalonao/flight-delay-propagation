@@ -25,35 +25,63 @@ from sklearn.metrics import (
 DEFAULT_THRESHOLDS = [15, 30, 45, 60]
 
 
+_HISTGBM_DEFAULTS = dict(
+    max_iter=400, learning_rate=0.05, max_leaf_nodes=63,
+    min_samples_leaf=200, l2_regularization=1.0,
+)
+_LIGHTGBM_DEFAULTS = dict(
+    n_estimators=2000, learning_rate=0.03, num_leaves=255,
+    min_child_samples=200, subsample=0.8, subsample_freq=1,
+    colsample_bytree=0.8, reg_lambda=1.0, n_jobs=-1,
+)
+
+
 class FlightDelayModel:
-    """Envuelve un ``HistGradientBoostingRegressor`` con I/O y métricas."""
+    """Regresor de retraso per-vuelo con backend conmutable (HistGBM / LightGBM).
+
+    ``backend='lightgbm'`` admite early stopping vía ``fit(..., eval_set=...)``.
+    HistGBM es el por defecto (compatibilidad hacia atrás).
+    """
 
     def __init__(
         self,
         categorical_features: list[str] | None = None,
         *,
-        max_iter: int = 400,
-        learning_rate: float = 0.05,
-        max_leaf_nodes: int = 63,
-        min_samples_leaf: int = 200,
-        l2_regularization: float = 1.0,
+        backend: str = "histgbm",
         random_state: int = 42,
+        **params,
     ) -> None:
         self.categorical_features = categorical_features or []
+        self.backend = backend
         self.feature_names_: list[str] | None = None
-        self.regressor = HistGradientBoostingRegressor(
-            max_iter=max_iter,
-            learning_rate=learning_rate,
-            max_leaf_nodes=max_leaf_nodes,
-            min_samples_leaf=min_samples_leaf,
-            l2_regularization=l2_regularization,
-            categorical_features=self.categorical_features or None,
-            random_state=random_state,
-        )
+        if backend == "lightgbm":
+            from lightgbm import LGBMRegressor
+            cfg = {**_LIGHTGBM_DEFAULTS, **params, "random_state": random_state}
+            self.regressor = LGBMRegressor(verbose=-1, **cfg)
+        elif backend == "histgbm":
+            cfg = {**_HISTGBM_DEFAULTS, **params}
+            self.regressor = HistGradientBoostingRegressor(
+                categorical_features=self.categorical_features or None,
+                random_state=random_state, **cfg,
+            )
+        else:
+            raise ValueError(f"backend desconocido: {backend!r}")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "FlightDelayModel":
+    def fit(self, X, y, eval_set=None) -> "FlightDelayModel":
         self.feature_names_ = list(X.columns)
-        self.regressor.fit(X, y)
+        if self.backend == "lightgbm":
+            import lightgbm as lgb
+            cat = [c for c in self.categorical_features if c in X.columns]
+            callbacks = []
+            if eval_set is not None:
+                callbacks = [lgb.early_stopping(50, verbose=False),
+                             lgb.log_evaluation(0)]
+            self.regressor.fit(
+                X, y, eval_set=eval_set,
+                categorical_feature=cat or "auto", callbacks=callbacks or None,
+            )
+        else:
+            self.regressor.fit(X, y)
         return self
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
@@ -65,14 +93,16 @@ class FlightDelayModel:
         joblib.dump(
             {"regressor": self.regressor,
              "categorical_features": self.categorical_features,
-             "feature_names": self.feature_names_},
+             "feature_names": self.feature_names_,
+             "backend": self.backend},
             path,
         )
 
     @classmethod
     def load(cls, path: str | Path) -> "FlightDelayModel":
         blob = joblib.load(path)
-        obj = cls(categorical_features=blob["categorical_features"])
+        obj = cls(categorical_features=blob["categorical_features"],
+                  backend=blob.get("backend", "histgbm"))
         obj.regressor = blob["regressor"]
         obj.feature_names_ = blob["feature_names"]
         return obj
