@@ -180,6 +180,19 @@ evaluation:
   metrics: [mae, rmse, mape, r2]
   delay_threshold_minutes: 15    # Umbral para clasificación binaria
 
+# =============================================================================
+# Export para Power BI (scripts/export_powerbi.py)
+# =============================================================================
+# Genera el esquema en estrella bajo ``out_dir`` (dim_airport, dim_date,
+# dim_hour, fact_airport_hour, agg_baseline_volume, agg_* y fact_predictions).
+# ``seats_per_flight`` habilita columnas de pasajeros ESTIMADOS (proxy =
+# vuelos x asientos); ponlo a null/0 para omitirlas. El dataset no contiene
+# conteos reales de pasajeros — es flight-level — por eso es una estimación.
+powerbi:
+  out_dir: outputs/powerbi
+  seats_per_flight: 130          # estimación media US doméstico; null/0 = omitir
+  prediction_split: test         # split temporal a predecir para fact_predictions
+
 reproducibility:
   seed: 42
   deterministic: true

@@ -15,7 +15,8 @@ Query params:
 
 Returns JSON:
     {"airport": "ATL", "horizon": 2, "predicted_arr_delay_min": 14.3,
-     "prediction_ts": "2026-05-19T15:00:00+00:00"}
+     "pct_arr_delayed_15": 0.62, "target_ts": "2026-05-19T16:00:00+00:00",
+     "prediction_ts": "2026-05-19T14:00:00+00:00"}
 """
 
 import json
@@ -29,7 +30,8 @@ logger = logging.getLogger(__name__)
 WORKSPACE_ID   = os.environ["ONELAKE_WORKSPACE_ID"]
 LAKEHOUSE_ID   = os.environ["ONELAKE_LAKEHOUSE_ID"]
 # Actual hours ahead, matching configs/production.yaml graph.prediction_horizons.
-# Delta-table columns are named arr_delay_h{H} where H ∈ this set.
+# The predictions_latest table is in LONG format: one row per
+# (airport_code, horizon_h), so we filter on those columns.
 VALID_HORIZONS = {1, 2, 4, 6, 8}
 
 
@@ -51,22 +53,26 @@ def _read_prediction(airport: str, horizon: int):
     }
 
     dt = DeltaTable(_table_uri(), storage_options=storage_options)
-    df = dt.to_pandas(filters=[("airport", "=", airport)])
+    df = dt.to_pandas(
+        filters=[("airport_code", "=", airport), ("horizon_h", "=", horizon)]
+    )
 
     if df.empty:
         return None
 
-    col = f"arr_delay_h{horizon}"
-    if col not in df.columns:
-        return None
-
+    # Most recent prediction for this (airport, horizon).
     row = df.sort_values("prediction_ts", ascending=False).iloc[0]
-    return {
-        "airport": row["airport"],
-        "horizon": horizon,
-        "predicted_arr_delay_min": round(float(row[col]), 1),
+    result = {
+        "airport": row["airport_code"],
+        "horizon": int(row["horizon_h"]),
+        "predicted_arr_delay_min": round(float(row["predicted_arr_delay_min"]), 1),
         "prediction_ts": str(row["prediction_ts"]),
     }
+    if "pct_arr_delayed_15" in df.columns:
+        result["pct_arr_delayed_15"] = round(float(row["pct_arr_delayed_15"]), 3)
+    if "target_ts" in df.columns:
+        result["target_ts"] = str(row["target_ts"])
+    return result
 
 
 def _bad_request(msg: str) -> func.HttpResponse:
