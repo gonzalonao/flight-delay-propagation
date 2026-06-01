@@ -114,3 +114,51 @@ features). Proposed path:
 4. **Horizon-honest evaluation**: re-run with the inbound delay replaced by a
    predicted/observed-so-far value to measure the realistic (non-optimistic)
    recall at each horizon.
+
+---
+
+# Part 2 — Point-in-time pipeline results (honest, per horizon)
+
+> The headline above (flat recall ~0.45) assumed the inbound aircraft's *actual*
+> arrival is known — optimistic at long horizons. The productionized pipeline
+> (`src/flight_level/`, `scripts/train_flight_model.py`) enforces
+> **point-in-time correctness**: at horizon H, prediction time is
+> `t_pred = scheduled_departure − H`, and a feature may use the inbound leg's
+> ArrDelay only if it has *landed* by `t_pred`, else its DepDelay if it has
+> *departed*, else nothing; airport-state features use only the last
+> fully-completed hour(s) before `t_pred`. These are the numbers to trust.
+
+**Ablation × horizon** (600k train, 1.38M test 2019-Q4; recall@15 unless noted):
+
+| Feature set | H=1 | H=2 | H=4 | H=6 | H=8 | precision@15 (H=1) |
+|---|---|---|---|---|---|---|
+| A schedule+route | 0.160 | 0.160 | 0.160 | 0.160 | 0.160 | 0.299 |
+| B + airline | 0.178 | 0.178 | 0.178 | 0.178 | 0.178 | 0.307 |
+| C + rotation | **0.336** | 0.313 | 0.190 | 0.169 | 0.158 | **0.602** |
+| D + airport-state | 0.262 | 0.243 | **0.223** | **0.216** | **0.209** | 0.444 |
+| **E all** | **0.389** | **0.365** | **0.254** | **0.225** | **0.210** | **0.621** |
+| *GNN baseline (agg)* | — | — | — | — | — | *0.523 (rec 0.352)* |
+
+**What the point-in-time view reveals (that the optimistic study hid):**
+
+1. **The two signals have different temporal reach.** Rotation (C) is the
+   strongest lift at H=1–2 (recall 0.336/0.313, precision 0.60) but **decays to
+   the schedule floor by H=8** — the specific inbound aircraft hasn't departed
+   yet, so its state is unobservable. Airport-state (D) is weaker at H=1 but
+   **persists** (0.262→0.209) because congestion is autocorrelated over hours.
+2. **They are complementary.** E (all) is best at every horizon: at H=1 rotation
+   carries it (0.389/0.621 — beats the GNN on both recall *and* precision); from
+   H≥4 airport-state carries it (D > C).
+3. **Schedule/airline alone is a weak, horizon-flat floor** (A 0.160, B 0.178).
+   Airline's marginal lift is real but small and time-independent.
+4. **The per-flight model beats the GNN at short horizons** (E H=1: recall 0.389
+   vs 0.352, precision 0.621 vs 0.523) on the harder per-flight task; at long
+   horizons recall falls below the GNN — expected, since the dominant per-flight
+   signal (inbound aircraft) is no longer observable.
+
+**Architectural implication.** To keep rotation's edge at H=4/6/8 we must
+*predict* the inbound leg's delay and chain it along the tail rotation (recursive
+/ sequential prediction) — precisely where a sequential or graph model adds
+value. Short-horizon serving (H=1–2) is already strong with the plain GBM. A
+natural design: GBM for H=1–2; rotation-chaining (or the GNN's spatial signal)
+for longer horizons.
