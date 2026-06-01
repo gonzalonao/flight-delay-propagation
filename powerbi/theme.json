@@ -1,0 +1,47 @@
+{
+  "name": "Flight Delay TFM",
+  "dataColors": [
+    "#2E5EAA",
+    "#16A0A0",
+    "#F2A900",
+    "#E4572E",
+    "#7B61FF",
+    "#4CAF50",
+    "#8C9BAB",
+    "#1B1F3B",
+    "#5BC0BE",
+    "#C44536"
+  ],
+  "background": "#FFFFFF",
+  "foreground": "#1B1F3B",
+  "foregroundNeutralSecondary": "#5A6472",
+  "tableAccent": "#2E5EAA",
+  "good": "#4CAF50",
+  "neutral": "#F2A900",
+  "bad": "#E4572E",
+  "maximum": "#C44536",
+  "center": "#F2A900",
+  "minimum": "#16A0A0",
+  "null": "#8C9BAB",
+  "textClasses": {
+    "title": { "fontFace": "Segoe UI Semibold", "fontSize": 16, "color": "#1B1F3B" },
+    "header": { "fontFace": "Segoe UI Semibold", "fontSize": 12, "color": "#1B1F3B" },
+    "label": { "fontFace": "Segoe UI", "fontSize": 10, "color": "#5A6472" },
+    "callout": { "fontFace": "Segoe UI Semibold", "fontSize": 36, "color": "#2E5EAA" }
+  },
+  "visualStyles": {
+    "*": {
+      "*": {
+        "background": [{ "show": true, "color": { "solid": { "color": "#FFFFFF" } }, "transparency": 0 }],
+        "border": [{ "show": true, "color": { "solid": { "color": "#E6E9EF" } }, "radius": 8 }],
+        "visualHeader": [{ "show": true, "background": { "solid": { "color": "#FFFFFF" } } }]
+      }
+    },
+    "page": {
+      "*": {
+        "background": [{ "color": { "solid": { "color": "#F4F6FA" } }, "transparency": 0 }],
+        "outspace": [{ "color": { "solid": { "color": "#F4F6FA" } } }]
+      }
+    }
+  }
+}
