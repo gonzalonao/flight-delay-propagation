@@ -161,7 +161,8 @@ def load_checkpoint(
         Diccionario con ``epoch``, ``metrics`` y, si está disponible,
         ``model_name``.
     """
-    checkpoint = torch.load(path, weights_only=False)
+    map_location = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    checkpoint = torch.load(path, map_location=map_location, weights_only=False)
 
     saved_model_name = checkpoint.get("model_name")
     if (

@@ -18,6 +18,7 @@ import datetime as dt
 import urllib.error
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -48,8 +49,11 @@ def _make_payload(num_hours: int = 24) -> dict:
             "wind_gusts_10m": [15.0 + i for i in range(num_hours)],
             "precipitation": [0.0] * num_hours,
             "cloud_cover": [50] * num_hours,
-            "weather_code": [0, 1, 45, 51, 63, 71, 80, 95]
-            + [3] * (num_hours - 8),
+            # Mezcla representativa (un código por bucket) en las primeras
+            # horas, relleno con 3=clear. Truncado a num_hours para que el
+            # bloque sea válido también con num_hours < 8.
+            "weather_code": ([0, 1, 45, 51, 63, 71, 80, 95]
+            + [3] * max(0, num_hours - 8))[:num_hours],
         }
     }
 
