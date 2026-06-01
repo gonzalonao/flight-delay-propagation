@@ -254,6 +254,23 @@ def assert_no_leakage(feature_columns: list[str]) -> None:
         raise ValueError(f"Fuga de datos: features prohibidas en X: {sorted(leaked)}")
 
 
+def build_work_frame(
+    df: pd.DataFrame, horizon_h: int, hourly: pd.DataFrame
+) -> pd.DataFrame:
+    """Frame de trabajo point-in-time para un horizonte: features + columnas de
+    apoyo (``dep_dt``, ``arr_dt``, ``Dest``, target), todas alineadas por fila.
+
+    Útil para la fusión GNN↔per-vuelo, que necesita unir por fila el pronóstico
+    del GNN sin que el reordenado interno de la rotación desalinee los datos.
+    """
+    work = add_airport_state_asof(df, hourly, horizon_h)
+    work = add_rotation_asof(work, horizon_h)
+    for c in CATEGORICAL_FEATURES:
+        if c in work:
+            work[c] = work[c].astype("category")
+    return work
+
+
 def assemble(
     df: pd.DataFrame,
     horizon_h: int,
@@ -267,11 +284,5 @@ def assemble(
     pedidas (categóricas con dtype ``category``).
     """
     assert_no_leakage(feature_columns)
-    work = add_airport_state_asof(df, hourly, horizon_h)
-    work = add_rotation_asof(work, horizon_h)
-    for c in CATEGORICAL_FEATURES:
-        if c in feature_columns and c in work:
-            work[c] = work[c].astype("category")
-    X = work[feature_columns]
-    y = work[TARGET].astype("float32")
-    return X, y
+    work = build_work_frame(df, horizon_h, hourly)
+    return work[feature_columns], work[TARGET].astype("float32")

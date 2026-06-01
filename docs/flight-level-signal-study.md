@@ -162,3 +162,62 @@ features). Proposed path:
 value. Short-horizon serving (H=1–2) is already strong with the plain GBM. A
 natural design: GBM for H=1–2; rotation-chaining (or the GNN's spatial signal)
 for longer horizons.
+
+---
+
+# Part 3 — GNN ↔ per-flight fusion (how the two models play together)
+
+> The GNN baseline and the per-flight model stay **separate** (no shared code).
+> This experiment only *consumes their outputs* to test fusion, point-in-time.
+> Code: `src/flight_level/fusion.py`, `scripts/compare_fusion.py`. The GNN's
+> airport-hour forecast is broadcast to each flight as the prediction for its
+> destination-hour, taken from the freshest GNN forecast issued ≤ `t_pred`.
+> Fusion knobs (blend weight, switch, stack meta-model) are fit on **val**
+> (out-of-sample) and reported on **test** — no stacking leakage.
+
+**Per-flight test results (E_all features; recall/precision at 15 min):**
+
+| H | strategy | MAE | rec@15 | pre@15 | rec@30 |
+|---|---|---|---|---|---|
+| 1 | gbm_only | 18.18 | 0.389 | 0.621 | 0.358 |
+| 1 | gnn_only | 21.16 | 0.221 | 0.413 | 0.109 |
+| 1 | **stack** | **18.09** | **0.418** | 0.598 | **0.383** |
+| 2 | gbm_only | 19.41 | 0.365 | 0.523 | 0.288 |
+| 2 | **stack** | **19.21** | **0.377** | **0.531** | **0.312** |
+| 4 | gbm_only | 20.90 | **0.254** | 0.426 | 0.136 |
+| 4 | **stack** | **20.33** | 0.253 | **0.462** | **0.167** |
+| 6 | gbm_only | 21.26 | **0.225** | 0.393 | 0.093 |
+| 6 | **stack** | **20.52** | 0.216 | **0.445** | **0.125** |
+| 8 | gbm_only | 21.47 | 0.210 | 0.371 | 0.070 |
+| 8 | gnn_only | 22.39 | **0.215** | 0.387 | 0.091 |
+| 8 | **stack** | **20.55** | 0.202 | **0.438** | **0.107** |
+
+(blend and switch omitted for brevity; see `report.json`.)
+
+**Findings:**
+
+1. **Feature-level stacking is the winner.** Feeding the GNN's airport-hour
+   forecast into the per-flight GBM as a feature beats every single-model option:
+   it has the **lowest MAE at every horizon** and the **highest precision@15 and
+   recall@30 from H≥4**. At short horizons it also lifts recall@15 (H=1:
+   0.389→0.418; H=2: 0.365→0.377).
+2. **The GNN's value is the long-horizon / congestion regime.** Stack's gains
+   over gbm_only *grow* with horizon (MAE −0.6 at H=1 → −0.9 at H=8; rec@30 at
+   H=8: 0.070→0.107, +53%). The network's spatial congestion forecast supplies
+   exactly what the per-flight model loses when the inbound aircraft becomes
+   unobservable.
+3. **gnn_only is weak per-flight** (~0.22 recall, flat). Broadcasting an
+   airport-hour *mean* to individual flights is a smoothed predictor — far below
+   the GNN's own airport-hour recall (0.352), which is a different (easier) unit.
+   Not a contradiction: it confirms the GNN is a *complement*, not a per-flight
+   predictor on its own.
+4. **blend trades recall for precision** (pulls toward the smooth GNN); **switch
+   always chose the GBM** (higher val F1). Stacking dominates both.
+
+**Conclusion / recommended design.** They play together best via **stacking**:
+one per-flight GBM that *includes the GNN's destination-hour forecast as a
+feature*. Keep the two models independent and trained separately; the fusion
+lives only at inference/feature assembly. This gives the best MAE everywhere,
+the recall edge at H=1–2, and meaningful precision / big-delay-recall gains at
+long horizons — the GNN earning its keep exactly where the per-flight signal
+fades.
