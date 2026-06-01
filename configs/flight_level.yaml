@@ -1,0 +1,23 @@
+# Per-flight delay model (SEPARATE track from the GNN baseline; never merged to main).
+# Point-in-time features only: t_pred = scheduled_departure - horizon.
+
+data:
+  years: [2018, 2019]
+  top_n_airports: 70          # igual que el GNN, para comparar
+  train_end: "2019-07-01"     # train: dep_dt < train_end
+  test_start: "2019-10-01"    # test:  dep_dt >= test_start
+  sample_train: 600000        # submuestreo de train para velocidad (null = todo)
+
+model:
+  horizons: [1, 2, 4, 6, 8]   # horas de antelación (mismos objetivos que el GNN)
+  thresholds: [15, 30, 45, 60]
+  feature_set: E_all          # A_schedule | B_schedule_airline | C_schedule_rotation | D_schedule_airport | E_all
+  hgb:
+    max_iter: 400
+    learning_rate: 0.05
+    max_leaf_nodes: 63
+    min_samples_leaf: 200
+    l2_regularization: 1.0
+
+seed: 42
+out_dir: outputs/flight_level
