@@ -221,3 +221,67 @@ lives only at inference/feature assembly. This gives the best MAE everywhere,
 the recall edge at H=1–2, and meaningful precision / big-delay-recall gains at
 long horizons — the GNN earning its keep exactly where the per-flight signal
 fades.
+
+---
+
+# Part 4 — Full-data training: LightGBM + point-in-time weather (authoritative)
+
+> Code: `scripts/train_flight_full.py`, `src/flight_level/weather.py`,
+> LightGBM backend in `src/flight_level/model.py`. Trains on the **entire**
+> 2018–2019 train split (no 600k subsample): train=6,661,824, val=1,395,722,
+> test=1,378,256. Backend = LightGBM 4.6 with early stopping on val. One compact
+> random hyperparameter search (`--tune`, selected by val F1@15) reused across
+> all horizons: `num_leaves=127, learning_rate=0.03, min_child_samples=100,
+> colsample_bytree=0.7, subsample=0.9`.
+>
+> Two feature sets compared to isolate weather's contribution:
+> * **E_all** — schedule + route + airline + rotation + airport-state.
+> * **F_all_weather** — E_all + origin weather *as-of* `t_pred` + destination
+>   weather at scheduled arrival (forecast, mirroring the GNN, which also uses
+>   forward weather). Same Open-Meteo parquets the GNN consumes, at flight grain.
+
+**Per-flight test results (2019-Q4; recall/precision at 15 and 30 min):**
+
+| H | config | MAE | rec@15 | pre@15 | rec@30 |
+|---|---|---|---|---|---|
+| 1 | E_all | 17.59 | 0.455 | 0.603 | 0.423 |
+| 1 | **+weather** | **17.33** | **0.480** | **0.607** | **0.445** |
+| 2 | E_all | 18.79 | 0.423 | 0.541 | 0.358 |
+| 2 | **+weather** | **18.46** | **0.450** | **0.549** | **0.385** |
+| 4 | E_all | 20.45 | 0.317 | 0.447 | 0.211 |
+| 4 | **+weather** | **20.00** | **0.357** | **0.469** | **0.254** |
+| 6 | E_all | 20.95 | 0.283 | 0.417 | 0.167 |
+| 6 | **+weather** | **20.39** | **0.333** | **0.447** | **0.223** |
+| 8 | E_all | 21.25 | 0.267 | 0.395 | 0.145 |
+| 8 | **+weather** | **20.58** | **0.321** | **0.436** | **0.206** |
+
+**Findings:**
+
+1. **Full data + LightGBM is a large jump.** Versus the prior 600k HistGBM
+   baseline (H=1 rec@15=0.389, MAE=18.18), full-data LightGBM alone reaches
+   rec@15=0.455 / MAE=17.59 at H=1 — before weather.
+2. **Weather helps at every horizon, and the lift grows with H.** rec@15:
+   +0.025 at H=1 → +0.054 at H=8. rec@30 at H=8: 0.145→0.206 (+42%). MAE drops
+   monotonically with weather, most at long horizons (−0.67 at H=8). Weather is
+   complementary to the rotation signal: it's strongest exactly where rotation
+   has decayed to the schedule floor.
+3. **Authoritative operating numbers.** These are the reference per-flight
+   results: **+weather** is the recommended config. Best single-model recall@15
+   is 0.480 at H=1, degrading gracefully to 0.321 at H=8 — all well above the
+   GNN's airport-hour recall (0.352), on the harder per-flight unit.
+
+Saved models + metrics: `outputs/flight_level_full/` (`report.json`,
+`model_{config}_h{H}.joblib`).
+
+## Next steps (deferred levers)
+
+Two further recall levers are queued as dedicated runs (see
+`scripts/train_flight_recall.py`, `scripts/train_flight_chain.py`):
+
+1. **Recall-targeted objective + operating-point tuning** — instead of
+   thresholding the regression at exactly 15 min, tune the decision cutoff on
+   val (F-beta, β>1) and/or train a class-weighted classifier, to trade
+   precision for recall at a chosen operating point.
+2. **Inbound-delay chaining for long horizons** — when the inbound leg is not
+   yet observable at `t_pred`, predict its delay and feed it forward, to recover
+   the rotation signal that currently decays to the schedule floor past H=2.
