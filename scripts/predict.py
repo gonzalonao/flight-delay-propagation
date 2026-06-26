@@ -1,12 +1,12 @@
-"""Inferencia local por lotes para modelos de secuencia (seq2seq_gnn).
+"""Local batch inference for sequence models (seq2seq_gnn).
 
-Genera predicciones offline sobre un split temporal (por defecto ``test``)
-y las vuelca a Parquet con el **mismo esquema long** que la tabla
-``predictions_latest`` en OneLake, más columnas de verdad-terreno para poder
-medir precisión. Reutiliza el mismo pipeline de grafos que ``evaluate.py`` y
-el ensamblador de :mod:`src.inference.predictor`.
+Generates offline predictions over a temporal split (``test`` by default)
+and dumps them to Parquet with the **same long schema** as the
+``predictions_latest`` table in OneLake, plus ground-truth columns so
+accuracy can be measured. Reuses the same graph pipeline as ``evaluate.py``
+and the assembler in :mod:`src.inference.predictor`.
 
-Uso:
+Usage:
     python scripts/predict.py \
         --checkpoint outputs/runs/20260514-213242/seq2seq_gnn_large.pt \
         --config configs/weekend/seq2seq_gnn_large.yaml \
@@ -48,10 +48,10 @@ SPLIT_CHOICES = ("train", "val", "test", "all")
 
 
 def load_preprocessed(config: dict) -> tuple[pd.DataFrame, list[str]]:
-    """Carga y preprocesa los años configurados (filtro top-N aeropuertos).
+    """Load and preprocess the configured years (top-N airport filter).
 
-    Devuelve el DataFrame ya limpio y la lista de aeropuertos top-N, listos
-    tanto para agregaciones (export Power BI) como para construir grafos.
+    Returns the already-cleaned DataFrame and the list of top-N airports,
+    ready both for aggregations (Power BI export) and for building graphs.
     """
     data_dir = get_data_dir("raw", config)
     years = config["data"].get("years", [2018])
@@ -65,16 +65,16 @@ def load_preprocessed(config: dict) -> tuple[pd.DataFrame, list[str]]:
 
 
 def _sequences_for_split(graph_splits, split, input_window) -> list:
-    """Construye las secuencias deslizantes para el/los split(s) pedido(s)."""
+    """Build the sliding sequences for the requested split(s)."""
     targets = ["train", "val", "test"] if split == "all" else [split]
     sequences: list = []
     for name in targets:
         graphs = graph_splits.get(name, [])
         if not graphs:
-            logger.warning("Split '%s' sin grafos; se omite.", name)
+            logger.warning("Split '%s' has no graphs; skipping.", name)
             continue
         seqs = create_temporal_sequences(graphs, input_window)
-        logger.info("Split '%s': %d grafos -> %d secuencias", name, len(graphs), len(seqs))
+        logger.info("Split '%s': %d graphs -> %d sequences", name, len(graphs), len(seqs))
         sequences.extend(seqs)
     return sequences
 
@@ -88,29 +88,29 @@ def generate_predictions_from_df(
     include_actuals: bool = True,
     device=None,
 ) -> pd.DataFrame:
-    """Construye grafos desde ``df`` y devuelve el frame long de predicciones.
+    """Build graphs from ``df`` and return the long predictions frame.
 
-    Pensada para ser reutilizada por ``scripts/export_powerbi.py`` sin re-cargar
-    el dataset. El pipeline de grafos usa la caché de snapshots si está
-    configurada (``graph.cache_dir``), por lo que la segunda llamada es rápida.
+    Designed to be reused by ``scripts/export_powerbi.py`` without
+    re-loading the dataset. The graph pipeline uses the snapshot cache if
+    configured (``graph.cache_dir``), so the second call is fast.
 
     Args:
-        df: DataFrame preprocesado (salida de :func:`load_preprocessed`).
-        airports: Lista de aeropuertos top-N.
-        config: Configuración (debe casar con la arquitectura del checkpoint).
-        checkpoint_path: Ruta al checkpoint ``.pt`` del campeón.
+        df: Preprocessed DataFrame (output of :func:`load_preprocessed`).
+        airports: List of top-N airports.
+        config: Configuration (must match the checkpoint's architecture).
+        checkpoint_path: Path to the champion's ``.pt`` checkpoint.
         split: ``train`` | ``val`` | ``test`` | ``all``.
-        include_actuals: Añade columnas de verdad-terreno (precisión).
-        device: Dispositivo torch; si None se resuelve con ``select_device``.
+        include_actuals: Add ground-truth columns (accuracy).
+        device: torch device; if None it is resolved with ``select_device``.
 
     Returns:
-        ``pd.DataFrame`` con el esquema canónico de predicciones.
+        ``pd.DataFrame`` with the canonical predictions schema.
     """
     model_name = config["model"]["name"]
     if model_name not in SEQUENCE_MODELS:
         raise ValueError(
-            f"predict.py sólo soporta modelos de secuencia {sorted(SEQUENCE_MODELS)}; "
-            f"el config declara model.name='{model_name}'."
+            f"predict.py only supports sequence models {sorted(SEQUENCE_MODELS)}; "
+            f"the config declares model.name='{model_name}'."
         )
 
     if device is None:
@@ -127,10 +127,10 @@ def generate_predictions_from_df(
     input_window = config.get("graph", {}).get("input_window", 6)
     sequences = _sequences_for_split(graph_splits, split, input_window)
     if not sequences:
-        logger.error("No hay secuencias para el split '%s'.", split)
+        logger.error("No sequences for split '%s'.", split)
         return pd.DataFrame(columns=PREDICTION_COLUMNS)
 
-    # Dimensiones de entrada desde cualquier grafo disponible.
+    # Input dimensions from any available graph.
     sample_graph = graphs[0]
     input_dim = sample_graph.x.shape[1]
     sample_ea = sample_graph.edge_attr
@@ -140,7 +140,7 @@ def generate_predictions_from_df(
     )
     model = build_model(config, input_dim, edge_dim=edge_dim)
     info = load_checkpoint(checkpoint_path, model, expected_model_name=model_name)
-    logger.info("Checkpoint cargado: época %s", info.get("epoch"))
+    logger.info("Checkpoint loaded: epoch %s", info.get("epoch"))
     model = model.to(device)
 
     horizons = config.get("graph", {}).get("prediction_horizons", [1, 2, 4, 6, 8])
@@ -151,7 +151,7 @@ def generate_predictions_from_df(
         include_actuals=include_actuals,
     )
     logger.info(
-        "Predicciones generadas: %d filas (%d aeropuertos x %d horizontes x %d instantes)",
+        "Predictions generated: %d rows (%d airports x %d horizons x %d instants)",
         len(preds_df),
         preds_df["airport_code"].nunique() if not preds_df.empty else 0,
         len(horizons),
@@ -161,24 +161,24 @@ def generate_predictions_from_df(
 
 
 def parse_args() -> argparse.Namespace:
-    """Parsea los argumentos de línea de comandos."""
-    parser = argparse.ArgumentParser(description="Inferencia local por lotes (seq2seq_gnn)")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Ruta al checkpoint .pt")
-    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG, help="Config YAML (debe casar con el checkpoint)")
-    parser.add_argument("--split", type=str, default="test", choices=SPLIT_CHOICES, help="Split temporal a predecir")
-    parser.add_argument("--out", type=str, default="outputs/predictions_local.parquet", help="Ruta de salida Parquet")
-    parser.add_argument("--no-actuals", action="store_true", help="No incluir columnas de verdad-terreno")
+    """Parse the command-line arguments."""
+    parser = argparse.ArgumentParser(description="Local batch inference (seq2seq_gnn)")
+    parser.add_argument("--checkpoint", type=str, required=True, help="Path to the .pt checkpoint")
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG, help="YAML config (must match the checkpoint)")
+    parser.add_argument("--split", type=str, default="test", choices=SPLIT_CHOICES, help="Temporal split to predict")
+    parser.add_argument("--out", type=str, default="outputs/predictions_local.parquet", help="Parquet output path")
+    parser.add_argument("--no-actuals", action="store_true", help="Do not include ground-truth columns")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Punto de entrada principal."""
+    """Main entry point."""
     args = parse_args()
     config = load_config(args.config)
     set_seed(config.get("reproducibility", {}).get("seed", 42))
 
     logger.info("=" * 60)
-    logger.info("INFERENCIA LOCAL - %s", config["model"]["name"])
+    logger.info("LOCAL INFERENCE - %s", config["model"]["name"])
     logger.info("Checkpoint: %s | split=%s", args.checkpoint, args.split)
     logger.info("=" * 60)
 
@@ -189,13 +189,13 @@ def main() -> None:
     )
 
     if preds_df.empty:
-        logger.error("Sin predicciones; no se escribe salida.")
+        logger.error("No predictions; output not written.")
         return
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     preds_df.to_parquet(out_path, index=False)
-    logger.info("Predicciones escritas en %s (%d filas)", out_path, len(preds_df))
+    logger.info("Predictions written to %s (%d rows)", out_path, len(preds_df))
 
 
 if __name__ == "__main__":

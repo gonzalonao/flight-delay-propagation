@@ -1,13 +1,13 @@
-"""Convierte archivos CSV del dataset de Kaggle a formato Parquet.
+"""Convert Kaggle dataset CSV files to Parquet format.
 
-Lee los CSVs en chunks para evitar problemas de memoria y guarda
-cada año como un archivo Parquet comprimido.
+Reads the CSVs in chunks to avoid memory problems and saves each year as a
+compressed Parquet file.
 
-Uso:
+Usage:
     python scripts/convert_to_parquet.py
 
-Solo es necesario si descargaste los archivos en formato CSV.
-Si descargaste directamente los Parquet de Kaggle, este script no es necesario.
+Only needed if you downloaded the files in CSV format. If you downloaded the
+Parquet files directly from Kaggle, this script is not necessary.
 """
 
 import gc
@@ -22,7 +22,7 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Tipos de datos optimizados para reducir uso de memoria
+# Data types optimized to reduce memory usage
 DTYPES = {
     "FlightDate": str,
     "Airline": "category",
@@ -46,23 +46,23 @@ CHUNK_SIZE = 500_000
 
 
 def convert_csv_to_parquet(csv_path: Path, output_path: Path) -> None:
-    """Convierte un archivo CSV a Parquet leyendo en chunks.
+    """Convert a CSV file to Parquet by reading in chunks.
 
     Args:
-        csv_path: Ruta al archivo CSV de entrada.
-        output_path: Ruta al archivo Parquet de salida.
+        csv_path: Path to the input CSV file.
+        output_path: Path to the output Parquet file.
     """
-    logger.info("Convirtiendo: %s", csv_path.name)
+    logger.info("Converting: %s", csv_path.name)
 
     chunks = []
     for i, chunk in enumerate(pd.read_csv(csv_path, chunksize=CHUNK_SIZE, dtype=DTYPES)):
         chunks.append(chunk)
-        logger.info("  Chunk %d: %d filas leídas", i + 1, len(chunk))
+        logger.info("  Chunk %d: %d rows read", i + 1, len(chunk))
 
     df = pd.concat(chunks, ignore_index=True)
     df.to_parquet(output_path, engine="pyarrow", compression="snappy")
 
-    logger.info("  Guardado: %s (%d filas, %.1f MB)", output_path.name, len(df),
+    logger.info("  Saved: %s (%d rows, %.1f MB)", output_path.name, len(df),
                 output_path.stat().st_size / 1e6)
 
     del df, chunks
@@ -70,7 +70,7 @@ def convert_csv_to_parquet(csv_path: Path, output_path: Path) -> None:
 
 
 def main() -> None:
-    """Busca todos los CSVs en data/raw/ y los convierte a Parquet."""
+    """Find all CSVs in data/raw/ and convert them to Parquet."""
     raw_dir = Path(__file__).resolve().parent.parent / "data" / "raw"
     processed_dir = Path(__file__).resolve().parent.parent / "data" / "processed"
     processed_dir.mkdir(parents=True, exist_ok=True)
@@ -78,8 +78,8 @@ def main() -> None:
     csv_files = sorted(raw_dir.glob("Combined_Flights_*.csv"))
 
     if not csv_files:
-        logger.warning("No se encontraron archivos CSV en %s", raw_dir)
-        logger.info("Si descargaste los Parquet directamente, este script no es necesario.")
+        logger.warning("No CSV files found in %s", raw_dir)
+        logger.info("If you downloaded the Parquet files directly, this script is not necessary.")
         return
 
     for csv_path in csv_files:
@@ -87,12 +87,12 @@ def main() -> None:
         output_path = processed_dir / f"flights_{year}.parquet"
 
         if output_path.exists():
-            logger.info("Ya existe: %s (omitiendo)", output_path.name)
+            logger.info("Already exists: %s (skipping)", output_path.name)
             continue
 
         convert_csv_to_parquet(csv_path, output_path)
 
-    logger.info("Conversión completada.")
+    logger.info("Conversion complete.")
 
 
 if __name__ == "__main__":

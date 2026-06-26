@@ -70,7 +70,7 @@ def main() -> None:
     columns = config["data"].get("columns")
     sample_frac = config["data"].get("sample_frac")
 
-    logger.info("Cargando datos: años=%s", years)
+    logger.info("Loading data: years=%s", years)
     df = load_multiple_years(
         data_dir, years, columns=columns,
         sample_frac=sample_frac, random_seed=seed,
@@ -81,7 +81,7 @@ def main() -> None:
     top_n = config.get("graph", {}).get("top_n_airports", 30)
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
 
-    logger.info("Construyendo grafos (no se entrena, solo se extraen artefactos)...")
+    logger.info("Building graphs (no training, only artifact extraction)...")
     graphs, airport_map, norm_stats = build_graph_dataset(df, airports, config)
 
     # --- Read the existing checkpoint to recover metrics + dims ---
@@ -94,7 +94,7 @@ def main() -> None:
     am_path = output_dir / "airport_map.json"
     with open(am_path, "w") as f:
         json.dump(airport_map, f, indent=2)
-    logger.info("airport_map: %s (%d aeropuertos)", am_path, len(airport_map))
+    logger.info("airport_map: %s (%d airports)", am_path, len(airport_map))
 
     if norm_stats is not None:
         fs_path = output_dir / "feature_stats.pt"
@@ -102,8 +102,8 @@ def main() -> None:
         logger.info("feature_stats: %s", fs_path)
     else:
         logger.warning(
-            "normalize_features=False — feature_stats.pt no se genera. "
-            "El notebook de inferencia debe replicar la normalización manualmente."
+            "normalize_features=False — feature_stats.pt not generated. "
+            "The inference notebook must replicate the normalization manually."
         )
 
     # Recover input_dim / edge_dim from the first graph in the dataset
@@ -135,7 +135,7 @@ def main() -> None:
         json.dump(meta, f, indent=2, default=str)
     logger.info("metadata: %s", meta_path)
 
-    logger.info("OK — 3 artefactos listos en %s", output_dir)
+    logger.info("OK — 3 artifacts ready in %s", output_dir)
 
 
 if __name__ == "__main__":

@@ -1,24 +1,24 @@
-"""Exporta tablas planas (esquema en estrella) para el informe de Power BI.
+"""Export flat tables (star schema) for the Power BI report.
 
-Combina los **datos base 2018-2019** (los mismos usados en train/test) con las
-**predicciones derivadas** del campeón ``seq2seq_gnn``, y escribe un conjunto de
-tablas Parquet + CSV bajo ``outputs/powerbi/`` listas para importar:
+Combines the **2018-2019 base data** (the same used in train/test) with the
+**derived predictions** from the ``seq2seq_gnn`` champion, and writes a set
+of Parquet + CSV tables under ``outputs/powerbi/`` ready to import:
 
-    dim_airport            - metadatos de los 70 aeropuertos modelados
-    dim_date               - tabla calendario (slicers)
-    dim_hour               - hora del día / franja
-    fact_airport_hour      - agregado por (aeropuerto, hora): vuelos, retrasos
-    agg_baseline_volume    - volumen "habitual" por (aeropuerto, dow, hora)
-    agg_airline            - retraso medio por aerolínea x mes
-    agg_route              - retraso/volumen por ruta (origen-destino)
-    agg_distance_bucket    - retraso medio por tramo de distancia
-    fact_predictions       - predicciones (long) + verdad-terreno + enriquecido
+    dim_airport            - metadata of the 70 modeled airports
+    dim_date               - calendar table (slicers)
+    dim_hour               - hour of day / time band
+    fact_airport_hour      - aggregate per (airport, hour): flights, delays
+    agg_baseline_volume    - "usual" volume per (airport, dow, hour)
+    agg_airline            - mean delay per airline x month
+    agg_route              - delay/volume per route (origin-destination)
+    agg_distance_bucket    - mean delay per distance band
+    fact_predictions       - predictions (long) + ground truth + enriched
 
-Las tablas estáticas de referencia (``dim_airport``, ``agg_baseline_volume``)
-también sirven para subirlas una vez a OneLake y alimentar la página live
-(DirectLake). Ver ``docs/powerbi-report-spec.md``.
+The static reference tables (``dim_airport``, ``agg_baseline_volume``) also
+serve to be uploaded once to OneLake and feed the live page (DirectLake).
+See ``docs/powerbi-report-spec.md``.
 
-Uso:
+Usage:
     python scripts/export_powerbi.py \
         --checkpoint outputs/runs/20260514-213242/seq2seq_gnn_large.pt \
         --config configs/weekend/seq2seq_gnn_large.yaml
@@ -40,16 +40,16 @@ from src.utils.io import get_data_dir, get_project_root, get_output_dir
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
 
-# Import perezoso de predicciones: el módulo importa torch/PyG, que no hace
-# falta cuando se ejecuta sólo el export base (--no-predictions).
+# Lazy import of predictions: that module imports torch/PyG, which is not
+# needed when running only the base export (--no-predictions).
 
 logger = setup_logger(__name__)
 
 DEFAULT_CONFIG = "configs/weekend/seq2seq_gnn_large.yaml"
-DEFAULT_SEATS_PER_FLIGHT = 130  # estimación media de asientos/vuelo (US domestic)
+DEFAULT_SEATS_PER_FLIGHT = 130  # average seats/flight estimate (US domestic)
 AIRPORT_COORDS = "src/data/reference/airport_coords.csv"
 
-# Columnas mínimas necesarias para las agregaciones base.
+# Minimum columns needed for the base aggregations.
 _BASE_COLS = [
     "FlightDate", "Airline", "Origin", "Dest",
     "CRSDepTime", "CRSArrTime", "Distance",
@@ -61,20 +61,20 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 # --------------------------------------------------------------------------- #
-# Construcción del frame de vuelos (mantiene cancelados, red top-70)
+# Flight frame construction (keeps cancellations, top-70 network)
 # --------------------------------------------------------------------------- #
 def build_flight_frame(raw_df: pd.DataFrame, airports: list[str]) -> pd.DataFrame:
-    """Frame de vuelos con timestamps de salida/llegada por hora.
+    """Flight frame with hourly departure/arrival timestamps.
 
-    A diferencia de ``preprocess_pipeline`` (que descarta cancelados/desviados),
-    aquí los conservamos para poder reportar tasas de cancelación. Restringe a
-    vuelos cuyo origen Y destino están en la red de 70 aeropuertos modelada.
+    Unlike ``preprocess_pipeline`` (which discards cancelled/diverted), here
+    we keep them so we can report cancellation rates. Restricts to flights
+    whose origin AND destination are in the modeled 70-airport network.
     """
     cols = [c for c in _BASE_COLS if c in raw_df.columns]
     df = raw_df[cols].copy()
     df["FlightDate"] = pd.to_datetime(df["FlightDate"])
 
-    # Red modelada: ambos extremos en top-70.
+    # Modeled network: both endpoints in top-70.
     df = df[df["Origin"].isin(airports) & df["Dest"].isin(airports)].copy()
 
     for col in ("Cancelled", "Diverted"):
@@ -92,8 +92,8 @@ def build_flight_frame(raw_df: pd.DataFrame, airports: list[str]) -> pd.DataFram
     dep_hour = (dep // 100).clip(0, 23).astype(int)
     arr_hour = (arr // 100).clip(0, 23).astype(int)
     dep_date = df["FlightDate"].dt.normalize()
-    # Rollover nocturno: si la hora programada de llegada es anterior a la de
-    # salida, la llegada cae al día siguiente.
+    # Overnight rollover: if the scheduled arrival hour is before the
+    # departure hour, the arrival falls on the next day.
     overnight = (arr.values < dep.values)
     arr_date = dep_date + pd.to_timedelta(overnight.astype(int), unit="D")
 
@@ -110,11 +110,11 @@ def build_flight_frame(raw_df: pd.DataFrame, airports: list[str]) -> pd.DataFram
 def build_fact_airport_hour(
     flight_df: pd.DataFrame, seats_per_flight: int | None
 ) -> pd.DataFrame:
-    """Agregado por (aeropuerto, hora) combinando salidas y llegadas."""
+    """Aggregate per (airport, hour) combining departures and arrivals."""
     f = flight_df
     operated = ~f["Cancelled"]
 
-    # --- Salidas (agrupadas por Origin, dep_ts_hour) ---
+    # --- Departures (grouped by Origin, dep_ts_hour) ---
     dep = (
         f.assign(
             _del15=f["DepDel15"].fillna(0.0),
@@ -132,7 +132,7 @@ def build_fact_airport_hour(
         .rename(columns={"Origin": "airport_code", "dep_ts_hour": "ts_hour"})
     )
 
-    # --- Llegadas (agrupadas por Dest, arr_ts_hour) ---
+    # --- Arrivals (grouped by Dest, arr_ts_hour) ---
     arr = (
         f.assign(
             _del15=f["ArrDel15"].fillna(0.0),
@@ -179,10 +179,10 @@ def build_fact_airport_hour(
 # agg_baseline_volume
 # --------------------------------------------------------------------------- #
 def build_agg_baseline_volume(fact: pd.DataFrame) -> pd.DataFrame:
-    """Volumen 'habitual' por (aeropuerto, día-de-semana, hora).
+    """'Usual' volume per (airport, day-of-week, hour).
 
-    Promedia el volumen programado horario observado a lo largo de los dos años,
-    sirviendo como referencia para "tráfico vs. lo habitual" en el dashboard.
+    Averages the observed hourly scheduled volume across the two years,
+    serving as a reference for "traffic vs. usual" in the dashboard.
     """
     base = (
         fact.groupby(["airport_code", "day_of_week", "hour"], observed=True)
@@ -199,7 +199,7 @@ def build_agg_baseline_volume(fact: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
-# Tablas de factores (Página 2)
+# Factor tables (Page 2)
 # --------------------------------------------------------------------------- #
 def build_agg_airline(flight_df: pd.DataFrame) -> pd.DataFrame:
     op = flight_df[~flight_df["Cancelled"]]
@@ -250,7 +250,7 @@ def build_agg_distance_bucket(flight_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
-# Dimensiones
+# Dimensions
 # --------------------------------------------------------------------------- #
 def build_dim_airport(airports: list[str]) -> pd.DataFrame:
     coords_path = get_project_root() / AIRPORT_COORDS
@@ -259,7 +259,7 @@ def build_dim_airport(airports: list[str]) -> pd.DataFrame:
     dim = dim.rename(columns={"iata": "airport_code"})
     missing = sorted(set(airports) - set(dim["airport_code"]))
     if missing:
-        logger.warning("Aeropuertos sin coordenadas (%d): %s", len(missing), missing)
+        logger.warning("Airports without coordinates (%d): %s", len(missing), missing)
     return dim.sort_values("airport_code").reset_index(drop=True)
 
 
@@ -301,12 +301,12 @@ def build_dim_hour() -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
-# Enriquecimiento de predicciones
+# Prediction enrichment
 # --------------------------------------------------------------------------- #
 def enrich_predictions(
     preds_df: pd.DataFrame, fact: pd.DataFrame, baseline: pd.DataFrame
 ) -> pd.DataFrame:
-    """Añade volumen programado, baseline y métricas derivadas a las predicciones."""
+    """Add scheduled volume, baseline and derived metrics to the predictions."""
     if preds_df.empty:
         return preds_df
 
@@ -316,13 +316,13 @@ def enrich_predictions(
     df["dow"] = df["target_ts_dt"].dt.dayofweek
     df["hour"] = df["target_ts_dt"].dt.hour
 
-    # Volumen programado real en la hora objetivo (desde fact_airport_hour).
+    # Real scheduled volume at the target hour (from fact_airport_hour).
     sched = fact[["airport_code", "ts_hour", "sched_arr", "sched_dep"]].rename(
         columns={"ts_hour": "target_hour_bucket"}
     )
     df = df.merge(sched, on=["airport_code", "target_hour_bucket"], how="left")
 
-    # Baseline "habitual" para esa franja (aeropuerto, dow, hora).
+    # "Usual" baseline for that time band (airport, dow, hour).
     base = baseline[["airport_code", "day_of_week", "hour", "baseline_sched_arr"]].rename(
         columns={"day_of_week": "dow"}
     )
@@ -344,21 +344,21 @@ def enrich_predictions(
 # IO
 # --------------------------------------------------------------------------- #
 def write_table(df: pd.DataFrame, name: str, out_dir: Path) -> None:
-    """Escribe una tabla en Parquet (canónico) y CSV (importable en Power BI)."""
+    """Write a table to Parquet (canonical) and CSV (Power BI importable)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / f"{name}.parquet", index=False)
     df.to_csv(out_dir / f"{name}.csv", index=False, encoding="utf-8")
-    logger.info("  %-22s %8d filas, %2d columnas", name, len(df), df.shape[1])
+    logger.info("  %-22s %8d rows, %2d columns", name, len(df), df.shape[1])
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Exporta tablas para Power BI")
-    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG, help="Config YAML")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint .pt del campeón (para predicciones)")
-    parser.add_argument("--split", type=str, default="test", choices=("train", "val", "test", "all"), help="Split a predecir")
-    parser.add_argument("--out-dir", type=str, default=None, help="Directorio de salida (def: outputs/powerbi)")
-    parser.add_argument("--seats-per-flight", type=int, default=None, help="Asientos/vuelo para pasajeros estimados (0 para omitir)")
-    parser.add_argument("--no-predictions", action="store_true", help="Sólo tablas base (sin inferencia)")
+    parser = argparse.ArgumentParser(description="Export tables for Power BI")
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG, help="YAML config")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Champion .pt checkpoint (for predictions)")
+    parser.add_argument("--split", type=str, default="test", choices=("train", "val", "test", "all"), help="Split to predict")
+    parser.add_argument("--out-dir", type=str, default=None, help="Output directory (default: outputs/powerbi)")
+    parser.add_argument("--seats-per-flight", type=int, default=None, help="Seats/flight for estimated passengers (0 to omit)")
+    parser.add_argument("--no-predictions", action="store_true", help="Base tables only (no inference)")
     return parser.parse_args()
 
 
@@ -372,14 +372,14 @@ def main() -> None:
     seats = args.seats_per_flight
     if seats is None:
         seats = pbi_cfg.get("seats_per_flight", DEFAULT_SEATS_PER_FLIGHT)
-    seats = seats or None  # 0 -> None (omitir pasajeros)
+    seats = seats or None  # 0 -> None (omit passengers)
 
     logger.info("=" * 60)
-    logger.info("EXPORT POWER BI -> %s", out_dir)
-    logger.info("config=%s | split=%s | seats/vuelo=%s", args.config, args.split, seats)
+    logger.info("POWER BI EXPORT -> %s", out_dir)
+    logger.info("config=%s | split=%s | seats/flight=%s", args.config, args.split, seats)
     logger.info("=" * 60)
 
-    # --- Carga única del dataset crudo ---
+    # --- Single load of the raw dataset ---
     data_dir = get_data_dir("raw", config)
     years = config["data"].get("years", [2018])
     columns = config["data"].get("columns")
@@ -387,15 +387,15 @@ def main() -> None:
         data_dir, years, columns=columns, sample_frac=None, skip_missing=True,
     )
 
-    # Preprocesado una sola vez (misma definición de aeropuertos top-N que el
-    # entrenamiento). ``pre_df`` se reutiliza para la inferencia; ``airports``
-    # para acotar las agregaciones base a la red modelada.
+    # Preprocess once (same top-N airport definition as training). ``pre_df``
+    # is reused for inference; ``airports`` to scope the base aggregations to
+    # the modeled network.
     top_n = config.get("graph", {}).get("top_n_airports", 30)
     pre_df, airports = preprocess_pipeline(raw_df.copy(), top_n_airports=top_n)
-    logger.info("Aeropuertos modelados: %d", len(airports))
+    logger.info("Modeled airports: %d", len(airports))
 
-    # --- Tablas base (conservan cancelados) ---
-    logger.info("Construyendo tablas base...")
+    # --- Base tables (keep cancellations) ---
+    logger.info("Building base tables...")
     flight_df = build_flight_frame(raw_df, airports)
     fact_airport_hour = build_fact_airport_hour(flight_df, seats)
     agg_baseline = build_agg_baseline_volume(fact_airport_hour)
@@ -406,7 +406,7 @@ def main() -> None:
     agg_route = build_agg_route(flight_df)
     agg_distance = build_agg_distance_bucket(flight_df)
 
-    logger.info("Escribiendo tablas base en %s ...", out_dir)
+    logger.info("Writing base tables to %s ...", out_dir)
     write_table(dim_airport, "dim_airport", out_dir)
     write_table(dim_date, "dim_date", out_dir)
     write_table(dim_hour, "dim_hour", out_dir)
@@ -416,21 +416,21 @@ def main() -> None:
     write_table(agg_route, "agg_route", out_dir)
     write_table(agg_distance, "agg_distance_bucket", out_dir)
 
-    # --- Predicciones (opcional) ---
+    # --- Predictions (optional) ---
     if args.no_predictions:
-        logger.info("--no-predictions: se omite la inferencia.")
-        logger.info("Export base completo.")
+        logger.info("--no-predictions: skipping inference.")
+        logger.info("Base export complete.")
         return
 
     if not args.checkpoint:
         logger.warning(
-            "Sin --checkpoint: se omiten las predicciones. Pasa --checkpoint "
-            "para generar fact_predictions, o usa --no-predictions."
+            "No --checkpoint: skipping predictions. Pass --checkpoint to "
+            "generate fact_predictions, or use --no-predictions."
         )
         return
 
-    logger.info("Generando predicciones (split=%s)...", args.split)
-    from scripts.predict import generate_predictions_from_df  # import perezoso
+    logger.info("Generating predictions (split=%s)...", args.split)
+    from scripts.predict import generate_predictions_from_df  # lazy import
 
     preds_df = generate_predictions_from_df(
         pre_df, airports, config, args.checkpoint,
@@ -439,7 +439,7 @@ def main() -> None:
     preds_df = enrich_predictions(preds_df, fact_airport_hour, agg_baseline)
     write_table(preds_df, "fact_predictions", out_dir)
 
-    logger.info("Export completo: %s", out_dir)
+    logger.info("Export complete: %s", out_dir)
 
 
 if __name__ == "__main__":

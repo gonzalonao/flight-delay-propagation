@@ -1,8 +1,8 @@
-"""Script de evaluación de modelos entrenados.
+"""Evaluation script for trained models.
 
-Carga un checkpoint y ejecuta métricas sobre el conjunto de test.
+Loads a checkpoint and runs metrics over the test set.
 
-Uso:
+Usage:
     python scripts/evaluate.py --checkpoint outputs/best_dense_nn.pt --config configs/default.yaml
 """
 
@@ -52,30 +52,30 @@ logger = setup_logger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    """Parsea los argumentos de línea de comandos."""
-    parser = argparse.ArgumentParser(description="Evaluar modelo entrenado")
+    """Parse the command-line arguments."""
+    parser = argparse.ArgumentParser(description="Evaluate a trained model")
     parser.add_argument(
         "--checkpoint",
         type=str,
         required=True,
-        help="Ruta al checkpoint del modelo (.pt)",
+        help="Path to the model checkpoint (.pt)",
     )
     parser.add_argument(
         "--config",
         type=str,
         default="configs/default.yaml",
-        help="Ruta al archivo de configuración YAML",
+        help="Path to the YAML configuration file",
     )
     parser.add_argument(
         "--plots",
         action="store_true",
-        help="Generar gráficos de evaluación",
+        help="Generate evaluation plots",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Punto de entrada principal de la evaluación."""
+    """Main evaluation entry point."""
     args = parse_args()
     config = load_config(args.config)
     seed = config.get("reproducibility", {}).get("seed", 42)
@@ -83,25 +83,25 @@ def main() -> None:
 
     model_name = config["model"]["name"]
     logger.info("=" * 60)
-    logger.info("EVALUACIÓN - %s", model_name)
+    logger.info("EVALUATION - %s", model_name)
     logger.info("Checkpoint: %s", args.checkpoint)
     logger.info("=" * 60)
 
-    # --- Carga de datos ---
+    # --- Data loading ---
     data_dir = get_data_dir("raw", config)
     years = config["data"].get("years", [2018])
     columns = config["data"].get("columns")
 
-    # Para evaluación NO se usa muestreo (evaluar sobre datos completos).
-    # Carga TODOS los años; si falta alguno en disco, sigue con los que haya
-    # — pero advierte. Cargar sólo years[0] hace que val/test (cortes
-    # cronológicos en 2019) queden vacíos cuando years=[2018,2019].
+    # For evaluation, NO sampling is used (evaluate over the full data).
+    # Load ALL years; if some are missing on disk, proceed with what is
+    # available — but warn. Loading only years[0] makes val/test (with
+    # chronological cutoffs in 2019) empty when years=[2018,2019].
     df = load_multiple_years(
         data_dir, years, columns=columns,
         sample_frac=None, skip_missing=True,
     )
 
-    # --- Preprocesamiento ---
+    # --- Preprocessing ---
     top_n = config.get("graph", {}).get("top_n_airports", 30)
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
 
@@ -113,13 +113,13 @@ def main() -> None:
     )
 
     if model_name in GRAPH_MODELS:
-        # Para modelos single-horizon, no pasar prediction_horizons
+        # For single-horizon models, do not pass prediction_horizons
         graph_config = config.copy()
         if not is_multi_horizon:
             graph_config = {**config, "graph": {**config.get("graph", {})}}
             graph_config["graph"].pop("prediction_horizons", None)
 
-        # --- Pipeline de grafos ---
+        # --- Graph pipeline ---
         graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, graph_config)
         split_cfg = config.get("split", {})
         graph_splits = split_graphs_temporal(
@@ -130,7 +130,7 @@ def main() -> None:
         test_graphs = graph_splits["test"]
 
         if not test_graphs:
-            logger.error("No hay grafos de test para evaluar.")
+            logger.error("No test graphs to evaluate.")
             return
 
         input_dim = test_graphs[0].x.shape[1]
@@ -145,7 +145,7 @@ def main() -> None:
             args.checkpoint, model, expected_model_name=model_name,
         )
         logger.info(
-            "Checkpoint cargado: época %d, métricas=%s",
+            "Checkpoint loaded: epoch %d, metrics=%s",
             checkpoint_info["epoch"], checkpoint_info["metrics"],
         )
 
@@ -158,7 +158,7 @@ def main() -> None:
             )
             if not test_sequences:
                 logger.error(
-                    "No hay secuencias de test (grafos=%d, window=%d).",
+                    "No test sequences (graphs=%d, window=%d).",
                     len(test_graphs), input_window,
                 )
                 return
@@ -184,7 +184,7 @@ def main() -> None:
             log_test_results(metrics, model_name, logger)
 
     else:
-        # --- Pipeline tabular ---
+        # --- Tabular pipeline ---
         target_col = config.get("features", {}).get("target", "ArrDelay")
         df, encoders, scaler = build_feature_matrix(df, config)
 
@@ -198,7 +198,7 @@ def main() -> None:
             args.checkpoint, model, expected_model_name=model_name,
         )
         logger.info(
-            "Checkpoint cargado: época %d, métricas=%s",
+            "Checkpoint loaded: epoch %d, metrics=%s",
             checkpoint_info["epoch"], checkpoint_info["metrics"],
         )
 
@@ -213,7 +213,7 @@ def main() -> None:
         metrics = evaluate_model(model, test_loader, device, delay_threshold)
         log_test_results(metrics, model_name, logger)
 
-    # --- Gráficos opcionales (solo modelos tabulares por ahora) ---
+    # --- Optional plots (tabular models only for now) ---
     if args.plots and model_name not in GRAPH_MODELS:
         model.eval()
         all_preds, all_targets = [], []

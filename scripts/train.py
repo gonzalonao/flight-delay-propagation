@@ -1,9 +1,9 @@
-"""Script principal de entrenamiento.
+"""Main training script.
 
-Carga la configuración, prepara los datos, instancia el modelo
-y ejecuta el bucle de entrenamiento.
+Loads the configuration, prepares the data, instantiates the model and
+runs the training loop.
 
-Uso:
+Usage:
     python scripts/train.py --config configs/default.yaml
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-# Añadir raíz del proyecto al path
+# Add the project root to the path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import FlightDelayDataset, create_splits, get_feature_columns
@@ -53,15 +53,15 @@ logger = setup_logger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    """Parsea los argumentos de línea de comandos."""
+    """Parse the command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Entrenar modelo de predicción de retrasos"
+        description="Train a flight-delay prediction model"
     )
     parser.add_argument(
         "--config",
         type=str,
         default="configs/default.yaml",
-        help="Ruta al archivo de configuración YAML",
+        help="Path to the YAML configuration file",
     )
     return parser.parse_args()
 
@@ -69,14 +69,14 @@ def parse_args() -> argparse.Namespace:
 def _build_optimizer_and_scheduler(
     model: torch.nn.Module, config: dict
 ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler | None]:
-    """Crea optimizador y scheduler según la configuración.
+    """Create the optimizer and scheduler according to the configuration.
 
     Args:
-        model: Modelo de PyTorch.
-        config: Configuración completa.
+        model: PyTorch model.
+        config: Full configuration.
 
     Returns:
-        Tupla de (optimizador, scheduler o None).
+        Tuple of (optimizer, scheduler or None).
     """
     training_config = config["training"]
     optimizer = torch.optim.Adam(
@@ -101,26 +101,26 @@ def _build_optimizer_and_scheduler(
 
 
 def _build_criterion(config: dict) -> torch.nn.Module:
-    """Construye la función de pérdida según ``training.loss``.
+    """Build the loss function according to ``training.loss``.
 
-    Soporta:
+    Supports:
 
-    - ``"mse"`` (por defecto si no se especifica): ``nn.MSELoss()``.
-    - ``"weighted_mse"``: MSE con ponderación por delay + horizonte.
-    - ``"weighted_huber"``: Huber con ponderación por delay + horizonte,
-      delta configurable vía ``training.huber_delta`` (default 10 min).
-    - ``"multi_task"`` (W2): combina ``Huber(arr) + aux·Huber(dep) +
-      bce·BCE(pct_15)`` con pesos configurables vía el bloque
-      ``training.multi_task``. Sólo tiene efecto sobre los modelos
-      multi-horizonte cuando además ``factory.build_model`` los crea con
-      ``output_channels=3`` (lo hace automáticamente al ver esta
-      ``loss``).
+    - ``"mse"`` (default if unspecified): ``nn.MSELoss()``.
+    - ``"weighted_mse"``: MSE weighted by delay + horizon.
+    - ``"weighted_huber"``: Huber weighted by delay + horizon, with a delta
+      configurable via ``training.huber_delta`` (default 10 min).
+    - ``"multi_task"`` (W2): combines ``Huber(arr) + aux·Huber(dep) +
+      bce·BCE(pct_15)`` with weights configurable via the
+      ``training.multi_task`` block. It only takes effect on the
+      multi-horizon models when ``factory.build_model`` also creates them
+      with ``output_channels=3`` (which it does automatically when it sees
+      this ``loss``).
 
     Args:
-        config: Configuración completa.
+        config: Full configuration.
 
     Returns:
-        Módulo de pérdida listo para usar en el trainer.
+        A loss module ready to use in the trainer.
     """
     training_config = config["training"]
     loss_name = training_config.get("loss", "mse")
@@ -140,7 +140,7 @@ def _build_criterion(config: dict) -> torch.nn.Module:
                 horizon_weights=horizon_weights,
             )
             logger.info(
-                "Pérdida: WeightedMSE (umbral=%.0f min, peso=%.1f%s)",
+                "Loss: WeightedMSE (threshold=%.0f min, weight=%.1f%s)",
                 delay_threshold, delay_weight, hw_str,
             )
         else:  # weighted_huber
@@ -152,8 +152,8 @@ def _build_criterion(config: dict) -> torch.nn.Module:
                 delta=delta,
             )
             logger.info(
-                "Pérdida: WeightedHuber (delta=%.1f min, umbral=%.0f min, "
-                "peso=%.1f%s)",
+                "Loss: WeightedHuber (delta=%.1f min, threshold=%.0f min, "
+                "weight=%.1f%s)",
                 delta, delay_threshold, delay_weight, hw_str,
             )
         return criterion
@@ -177,8 +177,8 @@ def _build_criterion(config: dict) -> torch.nn.Module:
             bce_pos_weight=mt_cfg.get("bce_pos_weight"),
         )
         logger.info(
-            "Pérdida: MultiTask (main=%.2f, aux=%.2f, bce=%.2f, "
-            "huber_delta=%.1f, umbral=%.0f min, peso_delay=%.1f, "
+            "Loss: MultiTask (main=%.2f, aux=%.2f, bce=%.2f, "
+            "huber_delta=%.1f, threshold=%.0f min, delay_weight=%.1f, "
             "horizon_weights=%s, bce_pos_weight=%s)",
             criterion.main_weight, criterion.aux_weight, criterion.bce_weight,
             delta, delay_threshold, delay_weight, horizon_weights,
@@ -195,29 +195,30 @@ def _save_deployment_artifacts(
     norm_stats: dict | None,
     config: dict,
 ) -> None:
-    """Guarda los artefactos necesarios para el despliegue junto al checkpoint.
+    """Save the artifacts needed for deployment alongside the checkpoint.
 
-    Produce tres ficheros en output_dir:
-      - airport_map.json    mapeo IATA → índice de nodo (congelado en deploy)
-      - feature_stats.pt    media y desviación de las node features de train
-      - metadata.json       métricas de config para champion/challenger
+    Produces three files in output_dir:
+      - airport_map.json    IATA → node-index map (frozen at deploy time)
+      - feature_stats.pt    mean and std of the train node features
+      - metadata.json       config metrics for champion/challenger
 
-    Estos ficheros deben subirse a OneLake junto a best_{model}_inference.pt
-    (generado por deploy/prep_inference_checkpoint.py).
+    These files must be uploaded to OneLake together with
+    best_{model}_inference.pt (generated by
+    deploy/prep_inference_checkpoint.py).
     """
     airport_map_path = output_dir / "airport_map.json"
     with open(airport_map_path, "w") as f:
         json.dump(airport_map, f, indent=2)
-    logger.info("airport_map guardado: %s (%d aeropuertos)", airport_map_path, len(airport_map))
+    logger.info("airport_map saved: %s (%d airports)", airport_map_path, len(airport_map))
 
     if norm_stats is not None:
         stats_path = output_dir / "feature_stats.pt"
         torch.save(norm_stats, stats_path)
-        logger.info("feature_stats guardado: %s", stats_path)
+        logger.info("feature_stats saved: %s", stats_path)
     else:
         logger.warning(
-            "normalize_features=False en config → feature_stats.pt no generado. "
-            "El notebook de inferencia debe aplicar la misma escala que en entrenamiento."
+            "normalize_features=False in config → feature_stats.pt not generated. "
+            "The inference notebook must apply the same scaling as during training."
         )
 
     meta = {
@@ -235,11 +236,11 @@ def _save_deployment_artifacts(
     meta_path = output_dir / "metadata.json"
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
-    logger.info("metadata.json guardado: %s", meta_path)
+    logger.info("metadata.json saved: %s", meta_path)
 
 
 def _train_tabular(config: dict, df, airports: list[str]) -> None:
-    """Pipeline de entrenamiento para modelos tabulares (DenseNN, LSTM)."""
+    """Training pipeline for tabular models (DenseNN, LSTM)."""
     target_col = config.get("features", {}).get("target", "ArrDelay")
     df, encoders, scaler = build_feature_matrix(df, config)
 
@@ -249,9 +250,9 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
 
     if len(val_features) == 0:
         raise RuntimeError(
-            f"Split tabular de validación vacío (train={len(train_features)}, "
-            f"val=0, test={len(splits['test'][0])}). Verifica que los años "
-            f"{config['data'].get('years')} cubran los cortes cronológicos "
+            f"Empty tabular validation split (train={len(train_features)}, "
+            f"val=0, test={len(splits['test'][0])}). Check that the years "
+            f"{config['data'].get('years')} cover the chronological cutoffs "
             f"{config.get('split', {})}."
         )
 
@@ -264,7 +265,7 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
 
     input_dim = train_features.shape[1]
     model = build_model(config, input_dim)
-    logger.info("Modelo: %s | Parámetros: %d",
+    logger.info("Model: %s | Parameters: %d",
                 config["model"]["name"],
                 sum(p.numel() for p in model.parameters()))
 
@@ -295,7 +296,7 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
         model_name=config["model"]["name"],
     )
 
-    # Evaluación final
+    # Final evaluation
     if "test" in splits:
         test_features, test_targets = splits["test"]
         test_dataset = FlightDelayDataset(test_features, test_targets)
@@ -307,21 +308,21 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
         metrics = evaluate_model(model, test_loader, device, delay_threshold)
         log_test_results(metrics, config["model"]["name"], logger)
 
-    logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
+    logger.info("Training complete. Checkpoint: %s", checkpoint_path)
 
 
 def _train_graph(config: dict, df, airports: list[str]) -> None:
-    """Pipeline de entrenamiento para modelos basados en grafos (GCN, GAT)."""
+    """Training pipeline for graph-based models (GCN, GAT)."""
     model_name = config["model"]["name"]
     is_multi_horizon = model_name in MULTI_HORIZON_MODELS
 
-    # Para modelos single-horizon, no pasar prediction_horizons al builder
+    # For single-horizon models, do not pass prediction_horizons to the builder
     graph_config = config.copy()
     if not is_multi_horizon:
         graph_config = {**config, "graph": {**config.get("graph", {})}}
         graph_config["graph"].pop("prediction_horizons", None)
 
-    # Construir grafos temporales
+    # Build temporal graphs
     graphs, airport_map, norm_stats = build_graph_dataset(df, airports, graph_config)
     split_cfg = config.get("split", {})
     graph_splits = split_graphs_temporal(
@@ -335,29 +336,29 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
 
     if not train_graphs:
         logger.error(
-            "No hay grafos de entrenamiento. Revisa los datos y la configuración."
+            "No training graphs. Check the data and the configuration."
         )
         return
 
     if not val_graphs:
-        # Sin val_graphs el trainer devuelve val_loss=0.0 silenciosamente
-        # en cada epoch (división por max(0,1)=1) y el early stopping nunca
-        # dispara. Falla con un mensaje claro indicando la causa típica:
-        # los cortes cronológicos del split no encuentran datos en disco.
+        # Without val_graphs the trainer silently returns val_loss=0.0 each
+        # epoch (division by max(0,1)=1) and early stopping never fires. Fail
+        # with a clear message indicating the typical cause: the split's
+        # chronological cutoffs find no data on disk.
         split_cfg_str = (
             f"train_end={split_cfg.get('train_end')}, "
             f"val_end={split_cfg.get('val_end')}"
         )
         raise RuntimeError(
-            f"Split de validación vacío (grafos_total={len(graphs)}, "
+            f"Empty validation split (total_graphs={len(graphs)}, "
             f"train={len(train_graphs)}, val=0, test={len(graph_splits['test'])}, "
-            f"{split_cfg_str}). Causa típica: el config declara "
-            f"years={config['data'].get('years')} pero sólo está descargado "
-            f"un subconjunto. Verifica los archivos en {get_data_dir('raw', config)}."
+            f"{split_cfg_str}). Typical cause: the config declares "
+            f"years={config['data'].get('years')} but only a subset is "
+            f"downloaded. Check the files in {get_data_dir('raw', config)}."
         )
 
-    # El input_dim viene de las node features del primer grafo;
-    # edge_dim de las edge_attr (None si no hay).
+    # input_dim comes from the first graph's node features;
+    # edge_dim from edge_attr (None if absent).
     input_dim = train_graphs[0].x.shape[1]
     sample_ea = train_graphs[0].edge_attr
     edge_dim = (
@@ -366,7 +367,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
     )
     model = build_model(config, input_dim, edge_dim=edge_dim)
     logger.info(
-        "Modelo: %s | Parámetros: %d | Nodos: %d | edge_dim: %s",
+        "Model: %s | Parameters: %d | Nodes: %d | edge_dim: %s",
         model_name,
         sum(p.numel() for p in model.parameters()),
         len(airport_map),
@@ -400,7 +401,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
         model_name=model_name,
     )
 
-    # Evaluación final sobre grafos de test
+    # Final evaluation on the test graphs
     test_graphs = graph_splits["test"]
     if test_graphs:
         delay_threshold = config.get("evaluation", {}).get(
@@ -422,18 +423,18 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
             log_test_results(metrics, model_name, logger)
 
     _save_deployment_artifacts(output_dir, airport_map, norm_stats, config)
-    logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
+    logger.info("Training complete. Checkpoint: %s", checkpoint_path)
 
 
 def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
-    """Pipeline de entrenamiento para modelos de secuencias de grafos.
+    """Training pipeline for graph-sequence models.
 
-    Para modelos como SpatioTemporalGNN que procesan secuencias de
-    snapshots temporales consecutivos (e.g., 6 horas de historia).
+    For models like SpatioTemporalGNN that process sequences of consecutive
+    temporal snapshots (e.g., 6 hours of history).
     """
     model_name = config["model"]["name"]
 
-    # Construir grafos temporales (multi-horizonte)
+    # Build temporal graphs (multi-horizon)
     graphs, airport_map, norm_stats = build_graph_dataset(df, airports, config)
     split_cfg = config.get("split", {})
     graph_splits = split_graphs_temporal(
@@ -442,7 +443,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         val_end=split_cfg.get("val_end"),
     )
 
-    # Crear secuencias por split (evita fuga entre conjuntos)
+    # Create sequences per split (avoids leakage between sets)
     input_window = config.get("graph", {}).get("input_window", 6)
     train_sequences = create_temporal_sequences(
         graph_splits["train"], input_window
@@ -452,31 +453,31 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
     )
 
     if not val_sequences:
-        # Misma lógica que en _train_graph: val vacío -> val_loss=0 silente.
+        # Same logic as in _train_graph: empty val -> silent val_loss=0.
         raise RuntimeError(
-            f"Split de validación vacío en secuencias "
-            f"(grafos_val={len(graph_splits['val'])}, "
-            f"input_window={input_window}). Verifica que el rango de fechas "
+            f"Empty validation split for sequences "
+            f"(val_graphs={len(graph_splits['val'])}, "
+            f"input_window={input_window}). Check that the date range "
             f"{config.get('split', {}).get('train_end')} → "
-            f"{config.get('split', {}).get('val_end')} esté cubierto por los "
-            f"años descargados ({config['data'].get('years')})."
+            f"{config.get('split', {}).get('val_end')} is covered by the "
+            f"downloaded years ({config['data'].get('years')})."
         )
 
     if not train_sequences:
         logger.error(
-            "No hay secuencias de entrenamiento. Revisa los datos y "
-            "la configuración (input_window=%d, grafos_train=%d).",
+            "No training sequences. Check the data and the configuration "
+            "(input_window=%d, train_graphs=%d).",
             input_window, len(graph_splits["train"]),
         )
         return
 
     logger.info(
-        "Secuencias: train=%d, val=%d (input_window=%d)",
+        "Sequences: train=%d, val=%d (input_window=%d)",
         len(train_sequences), len(val_sequences), input_window,
     )
 
-    # El input_dim viene de las node features del primer grafo;
-    # edge_dim de las edge_attr (None si no hay).
+    # input_dim comes from the first graph's node features;
+    # edge_dim from edge_attr (None if absent).
     input_dim = train_sequences[0][0].x.shape[1]
     sample_ea = train_sequences[0][0].edge_attr
     edge_dim = (
@@ -485,7 +486,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
     )
     model = build_model(config, input_dim, edge_dim=edge_dim)
     logger.info(
-        "Modelo: %s | Parámetros: %d | Nodos: %d | Secuencia: %d grafos | edge_dim: %s",
+        "Model: %s | Parameters: %d | Nodes: %d | Sequence: %d graphs | edge_dim: %s",
         model_name,
         sum(p.numel() for p in model.parameters()),
         len(airport_map),
@@ -520,7 +521,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         model_name=model_name,
     )
 
-    # Evaluación final sobre secuencias de test
+    # Final evaluation on the test sequences
     test_sequences = create_temporal_sequences(
         graph_splits["test"], input_window
     )
@@ -537,47 +538,47 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         log_multi_horizon_results(metrics, model_name, horizons, logger)
 
     _save_deployment_artifacts(output_dir, airport_map, norm_stats, config)
-    logger.info("Entrenamiento completado. Checkpoint: %s", checkpoint_path)
+    logger.info("Training complete. Checkpoint: %s", checkpoint_path)
 
 
 def main() -> None:
-    """Punto de entrada principal del entrenamiento."""
+    """Main training entry point."""
     args = parse_args()
     config = load_config(args.config)
 
-    # Fijar semilla para reproducibilidad
+    # Set the seed for reproducibility
     seed = config.get("reproducibility", {}).get("seed", 42)
     set_seed(seed)
 
     model_name = config["model"]["name"]
     logger.info("=" * 60)
-    logger.info("ENTRENAMIENTO - %s", model_name)
+    logger.info("TRAINING - %s", model_name)
     logger.info("=" * 60)
 
-    # --- Carga de datos ---
+    # --- Data loading ---
     data_dir = get_data_dir("raw", config)
     years = config["data"].get("years", [2018])
     columns = config["data"].get("columns")
     sample_frac = config["data"].get("sample_frac")
 
-    logger.info("Cargando datos: años=%s, muestreo=%.1f%%",
+    logger.info("Loading data: years=%s, sampling=%.1f%%",
                 years, (sample_frac or 1.0) * 100)
 
-    # Carga TODOS los años del config — el corte cronológico de los splits
-    # (train < train_end < val < val_end ≤ test) requiere que estén presentes
-    # las fechas que caen en cada bucket. Si el config dice [2018, 2019] pero
-    # sólo se carga 2018, val/test quedan vacíos y val_loss=0 silenciosamente.
+    # Load ALL years from the config — the splits' chronological cutoff
+    # (train < train_end < val < val_end ≤ test) requires the dates falling
+    # in each bucket to be present. If the config says [2018, 2019] but only
+    # 2018 is loaded, val/test end up empty and val_loss=0 silently.
     df = load_multiple_years(
         data_dir, years, columns=columns,
         sample_frac=sample_frac, random_seed=seed,
         skip_missing=True,
     )
 
-    # --- Preprocesamiento ---
+    # --- Preprocessing ---
     top_n = config.get("graph", {}).get("top_n_airports", 30)
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
 
-    # --- Entrenar según tipo de modelo ---
+    # --- Train according to model type ---
     if model_name in SEQUENCE_MODELS:
         _train_sequence_graph(config, df, airports)
     elif model_name in GRAPH_MODELS:
