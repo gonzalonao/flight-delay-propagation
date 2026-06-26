@@ -92,7 +92,8 @@ def select_device(config: dict | None = None) -> torch.device:
         "See docs/gpu-setup.md.\n"
         "    - To fail hard instead of falling back to CPU, add "
         "training.device: cuda to the YAML.",
-        torch_version, cuda_build,
+        torch_version,
+        cuda_build,
     )
     return torch.device("cpu")
 
@@ -102,12 +103,17 @@ def _log_cuda_info(device: torch.device) -> None:
     idx = device.index if device.index is not None else 0
     name = torch.cuda.get_device_name(idx)
     cap_major, cap_minor = torch.cuda.get_device_capability(idx)
-    total_mem_gb = torch.cuda.get_device_properties(idx).total_memory / (1024 ** 3)
+    total_mem_gb = torch.cuda.get_device_properties(idx).total_memory / (1024**3)
     cuda_build = torch.version.cuda
 
     logger.info(
         "Device: cuda:%d (%s, sm_%d%d, %.1f GB, torch CUDA build=%s)",
-        idx, name, cap_major, cap_minor, total_mem_gb, cuda_build,
+        idx,
+        name,
+        cap_major,
+        cap_minor,
+        total_mem_gb,
+        cuda_build,
     )
 
     # Specific warning: Blackwell (sm_120+) with CUDA build < 12.8 usually
@@ -123,5 +129,7 @@ def _log_cuda_info(device: torch.device) -> None:
                 "Blackwell GPU (sm_%d%d) detected with torch CUDA build %s. "
                 "Operations will likely fail at runtime: install cu128 "
                 "wheels (see docs/gpu-setup.md).",
-                cap_major, cap_minor, cuda_build,
+                cap_major,
+                cap_minor,
+                cuda_build,
             )

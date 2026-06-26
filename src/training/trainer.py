@@ -50,7 +50,8 @@ class Trainer(BaseTrainer):
         )
 
     def _forward_batch(
-        self, batch: tuple[torch.Tensor, torch.Tensor],
+        self,
+        batch: tuple[torch.Tensor, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, None]:
         """Move a tabular batch to the device and run the forward pass."""
         features, targets = batch

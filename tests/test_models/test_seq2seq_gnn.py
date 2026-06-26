@@ -17,7 +17,6 @@ from torch_geometric.data import Data
 from src.models.seq2seq_gnn import Seq2SeqGNN, SpatialGATEncoder
 from src.training.graph_trainer import SequenceGraphTrainer
 
-
 # -- Fixtures ----------------------------------------------------------------
 
 
@@ -29,8 +28,7 @@ def simple_graph():
     num_horizons = 5
     x = torch.randn(num_nodes, input_dim)
     edge_index = torch.tensor(
-        [[0, 1, 1, 2, 2, 3, 0, 3],
-         [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long
+        [[0, 1, 1, 2, 2, 3, 0, 3], [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long
     )
     # Non-negative ``edge_attr``: if a future test passes this to a layer
     # that normalizes weights (GCNConv) we avoid NaN. GATv2Conv treats it as
@@ -39,8 +37,11 @@ def simple_graph():
     y = torch.randn(num_nodes, num_horizons)
     active_mask = torch.ones(num_nodes, dtype=torch.bool)
     return Data(
-        x=x, edge_index=edge_index, edge_attr=edge_attr,
-        y=y, active_mask=active_mask,
+        x=x,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        y=y,
+        active_mask=active_mask,
     )
 
 
@@ -141,8 +142,7 @@ class TestSeq2SeqGNN:
         out2 = model(seq2)
 
         assert torch.allclose(out1, out2), (
-            "The new Seq2SeqGNN output must not depend on y "
-            "(no teacher forcing)."
+            "The new Seq2SeqGNN output must not depend on y (no teacher forcing)."
         )
 
     def test_targets_have_no_effect_in_train(self, graph_sequence):
@@ -189,9 +189,14 @@ class TestSeq2SeqGNN:
         model = _make_model()
         # Build with the same signature but output_channels=3.
         model = Seq2SeqGNN(
-            input_dim=6, hidden_dim=16, num_heads=2,
-            num_spatial_layers=2, num_temporal_layers=1,
-            num_horizons=5, dropout=0.3, edge_dim=1,
+            input_dim=6,
+            hidden_dim=16,
+            num_heads=2,
+            num_spatial_layers=2,
+            num_temporal_layers=1,
+            num_horizons=5,
+            dropout=0.3,
+            edge_dim=1,
             output_channels=3,
         )
         model.eval()
@@ -205,9 +210,13 @@ class TestSeq2SeqGNN:
         """output_channels < 1 must raise ValueError at construction."""
         with pytest.raises(ValueError, match=">= 1"):
             Seq2SeqGNN(
-                input_dim=6, hidden_dim=16, num_heads=2,
-                num_spatial_layers=1, num_temporal_layers=1,
-                num_horizons=3, output_channels=0,
+                input_dim=6,
+                hidden_dim=16,
+                num_heads=2,
+                num_spatial_layers=1,
+                num_temporal_layers=1,
+                num_horizons=3,
+                output_channels=0,
             )
 
     def test_hidden_dim_must_be_divisible_by_num_heads(self):
@@ -215,7 +224,7 @@ class TestSeq2SeqGNN:
         with pytest.raises(ValueError, match="divisible by num_heads"):
             Seq2SeqGNN(
                 input_dim=6,
-                hidden_dim=15,    # 15 is not divisible by 2
+                hidden_dim=15,  # 15 is not divisible by 2
                 num_heads=2,
                 num_spatial_layers=1,
                 num_temporal_layers=1,
@@ -225,8 +234,12 @@ class TestSeq2SeqGNN:
     def test_spatial_encoder_supports_single_layer(self, simple_graph):
         """SpatialGATEncoder with num_layers=1 still produces hidden_dim."""
         enc = SpatialGATEncoder(
-            input_dim=6, hidden_dim=16, num_heads=2,
-            num_layers=1, dropout=0.0, edge_dim=1,
+            input_dim=6,
+            hidden_dim=16,
+            num_heads=2,
+            num_layers=1,
+            dropout=0.0,
+            edge_dim=1,
         )
         out = enc(simple_graph.x, simple_graph.edge_index, simple_graph.edge_attr)
         assert out.shape == (4, 16)
@@ -262,7 +275,8 @@ class TestSeq2SeqWithTrainer:
         model = _make_model(hidden_dim=8)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=optimizer,
+            model=model,
+            optimizer=optimizer,
             criterion=torch.nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -278,7 +292,8 @@ class TestSeq2SeqWithTrainer:
         model = _make_model(hidden_dim=8, dropout=0.0)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=optimizer,
+            model=model,
+            optimizer=optimizer,
             criterion=torch.nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -295,7 +310,8 @@ class TestSeq2SeqWithTrainer:
         model = _make_model(hidden_dim=8)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=optimizer,
+            model=model,
+            optimizer=optimizer,
             criterion=torch.nn.MSELoss(),
             device=torch.device("cpu"),
         )

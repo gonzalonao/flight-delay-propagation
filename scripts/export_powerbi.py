@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data.loader import load_multiple_years
 from src.data.preprocessing import preprocess_pipeline
 from src.utils.config import load_config
-from src.utils.io import get_data_dir, get_project_root, get_output_dir
+from src.utils.io import get_data_dir, get_output_dir, get_project_root
 from src.utils.logger import setup_logger
 from src.utils.reproducibility import set_seed
 
@@ -51,10 +51,19 @@ AIRPORT_COORDS = "src/data/reference/airport_coords.csv"
 
 # Minimum columns needed for the base aggregations.
 _BASE_COLS = [
-    "FlightDate", "Airline", "Origin", "Dest",
-    "CRSDepTime", "CRSArrTime", "Distance",
-    "DepDelay", "ArrDelay", "DepDel15", "ArrDel15",
-    "Cancelled", "Diverted",
+    "FlightDate",
+    "Airline",
+    "Origin",
+    "Dest",
+    "CRSDepTime",
+    "CRSArrTime",
+    "Distance",
+    "DepDelay",
+    "ArrDelay",
+    "DepDel15",
+    "ArrDel15",
+    "Cancelled",
+    "Diverted",
 ]
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -94,7 +103,7 @@ def build_flight_frame(raw_df: pd.DataFrame, airports: list[str]) -> pd.DataFram
     dep_date = df["FlightDate"].dt.normalize()
     # Overnight rollover: if the scheduled arrival hour is before the
     # departure hour, the arrival falls on the next day.
-    overnight = (arr.values < dep.values)
+    overnight = arr.values < dep.values
     arr_date = dep_date + pd.to_timedelta(overnight.astype(int), unit="D")
 
     df["dep_ts_hour"] = dep_date + pd.to_timedelta(dep_hour, unit="h")
@@ -154,8 +163,14 @@ def build_fact_airport_hour(
     fact = arr.merge(dep, on=["airport_code", "ts_hour"], how="outer")
 
     count_cols = [
-        "sched_arr", "arr_operated", "arr_cancelled", "arr_del15",
-        "sched_dep", "dep_operated", "dep_cancelled", "dep_del15",
+        "sched_arr",
+        "arr_operated",
+        "arr_cancelled",
+        "arr_del15",
+        "sched_dep",
+        "dep_operated",
+        "dep_cancelled",
+        "dep_del15",
     ]
     for c in count_cols:
         if c in fact:
@@ -235,8 +250,18 @@ def build_agg_route(flight_df: pd.DataFrame) -> pd.DataFrame:
 def build_agg_distance_bucket(flight_df: pd.DataFrame) -> pd.DataFrame:
     op = flight_df[~flight_df["Cancelled"]].copy()
     bins = [0, 250, 500, 750, 1000, 1500, 2000, np.inf]
-    labels = ["0-250", "250-500", "500-750", "750-1000", "1000-1500", "1500-2000", "2000+"]
-    op["distance_bucket"] = pd.cut(op["Distance"], bins=bins, labels=labels, right=False)
+    labels = [
+        "0-250",
+        "250-500",
+        "500-750",
+        "750-1000",
+        "1000-1500",
+        "1500-2000",
+        "2000+",
+    ]
+    op["distance_bucket"] = pd.cut(
+        op["Distance"], bins=bins, labels=labels, right=False
+    )
     g = (
         op.groupby("distance_bucket", observed=True)
         .agg(
@@ -275,9 +300,20 @@ def build_dim_date(min_date: pd.Timestamp, max_date: pd.Timestamp) -> pd.DataFra
     dim["is_weekend"] = dim["day_of_week"] >= 5
     dim["quarter"] = dim["date"].dt.quarter
     dim["week_of_year"] = dim["date"].dt.isocalendar().week.astype(int)
-    season = {12: "Winter", 1: "Winter", 2: "Winter", 3: "Spring", 4: "Spring",
-              5: "Spring", 6: "Summer", 7: "Summer", 8: "Summer", 9: "Fall",
-              10: "Fall", 11: "Fall"}
+    season = {
+        12: "Winter",
+        1: "Winter",
+        2: "Winter",
+        3: "Spring",
+        4: "Spring",
+        5: "Spring",
+        6: "Summer",
+        7: "Summer",
+        8: "Summer",
+        9: "Fall",
+        10: "Fall",
+        11: "Fall",
+    }
     dim["season"] = dim["month"].map(season)
     return dim
 
@@ -323,9 +359,9 @@ def enrich_predictions(
     df = df.merge(sched, on=["airport_code", "target_hour_bucket"], how="left")
 
     # "Usual" baseline for that time band (airport, dow, hour).
-    base = baseline[["airport_code", "day_of_week", "hour", "baseline_sched_arr"]].rename(
-        columns={"day_of_week": "dow"}
-    )
+    base = baseline[
+        ["airport_code", "day_of_week", "hour", "baseline_sched_arr"]
+    ].rename(columns={"day_of_week": "dow"})
     df = df.merge(base, on=["airport_code", "dow", "hour"], how="left")
 
     df["sched_arr"] = df["sched_arr"].fillna(0)
@@ -353,12 +389,37 @@ def write_table(df: pd.DataFrame, name: str, out_dir: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export tables for Power BI")
-    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG, help="YAML config")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Champion .pt checkpoint (for predictions)")
-    parser.add_argument("--split", type=str, default="test", choices=("train", "val", "test", "all"), help="Split to predict")
-    parser.add_argument("--out-dir", type=str, default=None, help="Output directory (default: outputs/powerbi)")
-    parser.add_argument("--seats-per-flight", type=int, default=None, help="Seats/flight for estimated passengers (0 to omit)")
-    parser.add_argument("--no-predictions", action="store_true", help="Base tables only (no inference)")
+    parser.add_argument(
+        "--config", type=str, default=DEFAULT_CONFIG, help="YAML config"
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Champion .pt checkpoint (for predictions)",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="test",
+        choices=("train", "val", "test", "all"),
+        help="Split to predict",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=None,
+        help="Output directory (default: outputs/powerbi)",
+    )
+    parser.add_argument(
+        "--seats-per-flight",
+        type=int,
+        default=None,
+        help="Seats/flight for estimated passengers (0 to omit)",
+    )
+    parser.add_argument(
+        "--no-predictions", action="store_true", help="Base tables only (no inference)"
+    )
     return parser.parse_args()
 
 
@@ -368,7 +429,9 @@ def main() -> None:
     set_seed(config.get("reproducibility", {}).get("seed", 42))
     pbi_cfg = config.get("powerbi", {})
 
-    out_dir = Path(args.out_dir or pbi_cfg.get("out_dir") or (get_output_dir() / "powerbi"))
+    out_dir = Path(
+        args.out_dir or pbi_cfg.get("out_dir") or (get_output_dir() / "powerbi")
+    )
     seats = args.seats_per_flight
     if seats is None:
         seats = pbi_cfg.get("seats_per_flight", DEFAULT_SEATS_PER_FLIGHT)
@@ -376,7 +439,9 @@ def main() -> None:
 
     logger.info("=" * 60)
     logger.info("POWER BI EXPORT -> %s", out_dir)
-    logger.info("config=%s | split=%s | seats/flight=%s", args.config, args.split, seats)
+    logger.info(
+        "config=%s | split=%s | seats/flight=%s", args.config, args.split, seats
+    )
     logger.info("=" * 60)
 
     # --- Single load of the raw dataset ---
@@ -384,7 +449,11 @@ def main() -> None:
     years = config["data"].get("years", [2018])
     columns = config["data"].get("columns")
     raw_df = load_multiple_years(
-        data_dir, years, columns=columns, sample_frac=None, skip_missing=True,
+        data_dir,
+        years,
+        columns=columns,
+        sample_frac=None,
+        skip_missing=True,
     )
 
     # Preprocess once (same top-N airport definition as training). ``pre_df``
@@ -400,7 +469,9 @@ def main() -> None:
     fact_airport_hour = build_fact_airport_hour(flight_df, seats)
     agg_baseline = build_agg_baseline_volume(fact_airport_hour)
     dim_airport = build_dim_airport(airports)
-    dim_date = build_dim_date(flight_df["FlightDate"].min(), flight_df["FlightDate"].max())
+    dim_date = build_dim_date(
+        flight_df["FlightDate"].min(), flight_df["FlightDate"].max()
+    )
     dim_hour = build_dim_hour()
     agg_airline = build_agg_airline(flight_df)
     agg_route = build_agg_route(flight_df)
@@ -433,8 +504,12 @@ def main() -> None:
     from scripts.predict import generate_predictions_from_df  # lazy import
 
     preds_df = generate_predictions_from_df(
-        pre_df, airports, config, args.checkpoint,
-        split=args.split, include_actuals=True,
+        pre_df,
+        airports,
+        config,
+        args.checkpoint,
+        split=args.split,
+        include_actuals=True,
     )
     preds_df = enrich_predictions(preds_df, fact_airport_hour, agg_baseline)
     write_table(preds_df, "fact_predictions", out_dir)

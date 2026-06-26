@@ -32,9 +32,9 @@ ONELAKE_URL = "https://onelake.dfs.fabric.microsoft.com"
 
 def main() -> int:
     try:
+        import pyarrow.parquet as pq
         from azure.identity import DefaultAzureCredential
         from azure.storage.filedatalake import DataLakeServiceClient
-        import pyarrow.parquet as pq
     except ImportError as exc:
         print(f"ERROR: missing dep ({exc}).", file=sys.stderr)
         print(
@@ -58,13 +58,9 @@ def main() -> int:
         print()
         print("  Likely causes:")
         print("    - Your account lacks Member/Contributor on the Fabric workspace.")
-        print(
-            "      Fix: Fabric portal → TFM_Flight_Prediction → Manage access → add"
-        )
+        print("      Fix: Fabric portal → TFM_Flight_Prediction → Manage access → add")
         print("      your account as Member.")
-        print(
-            "    - The Lakehouse doesn't exist or the name doesn't match exactly."
-        )
+        print("    - The Lakehouse doesn't exist or the name doesn't match exactly.")
         return 1
     print(f"  OK — found {len(entries)} entries under Files/")
     for e in entries[:10]:
@@ -102,13 +98,12 @@ def main() -> int:
     if len(table):
         print(f"  Sample row: {table.to_pandas().iloc[0].to_dict()}")
     else:
-        print(
-            "  WARN: 0 rows — not a failure, try a different Month/DayofMonth filter"
-        )
+        print("  WARN: 0 rows — not a failure, try a different Month/DayofMonth filter")
 
     print()
     print(
-        "OK — azure-storage-file-datalake + OneLake works. Safe to refactor the Function."
+        "OK — azure-storage-file-datalake + OneLake works. "
+        "Safe to refactor the Function."
     )
     return 0
 

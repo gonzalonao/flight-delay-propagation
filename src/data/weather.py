@@ -117,7 +117,8 @@ def _load_proxy_pool() -> list[str]:
         except Exception as exc:  # pragma: no cover - network-dependent
             logger.warning(
                 "OPEN_METEO_PROXY_URL defined but the download failed: %s. "
-                "Continuing without proxies (direct requests).", exc,
+                "Continuing without proxies (direct requests).",
+                exc,
             )
     elif path:
         try:
@@ -126,7 +127,9 @@ def _load_proxy_pool() -> list[str]:
         except Exception as exc:  # pragma: no cover - FS-dependent
             logger.warning(
                 "OPEN_METEO_PROXY_FILE defined (%s) but the read failed: %s. "
-                "Continuing without proxies.", path, exc,
+                "Continuing without proxies.",
+                path,
+                exc,
             )
 
     if not text:
@@ -398,7 +401,8 @@ def fetch_open_meteo(
         except Exception as exc:  # pragma: no cover - corruption recovery
             logger.warning(
                 "Corrupt weather cache at %s (%s) — retrying HTTP.",
-                cache_path, exc,
+                cache_path,
+                exc,
             )
 
     url = _open_meteo_request_url(latitude, longitude, start_date, end_date)
@@ -415,7 +419,9 @@ def fetch_open_meteo(
         if pool:
             # We pick a different sub-sample on each call to spread load
             # across the 100 proxies without remembering state.
-            proxies_to_try.extend(random.sample(pool, k=min(_MAX_PROXY_RETRIES, len(pool))))
+            proxies_to_try.extend(
+                random.sample(pool, k=min(_MAX_PROXY_RETRIES, len(pool)))
+            )
 
     payload: dict | None = None
     last_exc: Exception | None = None
@@ -436,14 +442,19 @@ def fetch_open_meteo(
                 logger.warning(
                     "Direct Open-Meteo failed (lat=%.4f, lon=%.4f): %s. "
                     "Retrying via proxy pool (%d available).",
-                    latitude, longitude, exc, len(proxies_to_try) - 1,
+                    latitude,
+                    longitude,
+                    exc,
+                    len(proxies_to_try) - 1,
                 )
             continue
         else:
             if proxy is not None:
                 logger.info(
                     "Open-Meteo OK via proxy on attempt %d (lat=%.4f, lon=%.4f).",
-                    attempt_idx + 1, latitude, longitude,
+                    attempt_idx + 1,
+                    latitude,
+                    longitude,
                 )
             break
 
@@ -451,7 +462,12 @@ def fetch_open_meteo(
         logger.warning(
             "Open-Meteo failed after %d attempt(s) (lat=%.4f, lon=%.4f, %s..%s): %s. "
             "Returning empty DataFrame; the builder will fill with 0.",
-            len(proxies_to_try), latitude, longitude, start_date, end_date, last_exc,
+            len(proxies_to_try),
+            latitude,
+            longitude,
+            start_date,
+            end_date,
+            last_exc,
         )
         return _parse_open_meteo_response({})
 
@@ -518,8 +534,13 @@ def load_weather_for_airports(
             else None
         )
         df = fetch_open_meteo(
-            coord.latitude, coord.longitude, start_date, end_date,
-            cache_path=cp, timeout=timeout, _http_fetcher=_http_fetcher,
+            coord.latitude,
+            coord.longitude,
+            start_date,
+            end_date,
+            cache_path=cp,
+            timeout=timeout,
+            _http_fetcher=_http_fetcher,
         )
         if df.empty:
             continue
@@ -534,7 +555,8 @@ def load_weather_for_airports(
         logger.warning(
             "No coordinates in airport_coords.csv for %d airports: %s. "
             "Their weather features will be 0 (no signal).",
-            len(missing), ", ".join(missing[:10]) + ("..." if len(missing) > 10 else ""),
+            len(missing),
+            ", ".join(missing[:10]) + ("..." if len(missing) > 10 else ""),
         )
 
     if not frames:
@@ -554,6 +576,7 @@ def load_weather_for_airports(
         "Weather loaded: %d airports × %d hours (range %s..%s).",
         out.index.get_level_values("iata").nunique(),
         len(out.index.get_level_values("timestamp").unique()),
-        start_date, end_date,
+        start_date,
+        end_date,
     )
     return out

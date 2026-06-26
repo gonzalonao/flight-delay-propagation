@@ -37,7 +37,10 @@ def strip_optimizer(input_path: Path, output_path: Path) -> None:
     original_mb = input_path.stat().st_size / 1e6
     stripped_mb = output_path.stat().st_size / 1e6
     print(f"Saved inference checkpoint: {output_path}")
-    print(f"  {original_mb:.1f} MB  →  {stripped_mb:.1f} MB  ({100*(1-stripped_mb/original_mb):.0f}% smaller)")
+    pct_smaller = 100 * (1 - stripped_mb / original_mb)
+    print(
+        f"  {original_mb:.1f} MB  →  {stripped_mb:.1f} MB  ({pct_smaller:.0f}% smaller)"
+    )
     print(f"  model_name : {inference_ckpt.get('model_name', 'n/a')}")
     print(f"  epoch      : {inference_ckpt.get('epoch', 'n/a')}")
     print(f"  metrics    : {inference_ckpt.get('metrics', {})}")
@@ -77,11 +80,21 @@ def export_metadata(ckpt_path: Path, meta_path: Path, airport_map_path: Path) ->
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Strip optimizer state from checkpoint")
-    parser.add_argument("--input", required=True, help="Path to full training checkpoint (.pt)")
-    parser.add_argument("--output", required=True, help="Path for inference-only checkpoint (.pt)")
-    parser.add_argument("--airport-map", default=None, help="Path to airport_map.json (optional)")
-    parser.add_argument("--metadata", default=None, help="Path to write metadata.json (optional)")
+    parser = argparse.ArgumentParser(
+        description="Strip optimizer state from checkpoint"
+    )
+    parser.add_argument(
+        "--input", required=True, help="Path to full training checkpoint (.pt)"
+    )
+    parser.add_argument(
+        "--output", required=True, help="Path for inference-only checkpoint (.pt)"
+    )
+    parser.add_argument(
+        "--airport-map", default=None, help="Path to airport_map.json (optional)"
+    )
+    parser.add_argument(
+        "--metadata", default=None, help="Path to write metadata.json (optional)"
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -93,5 +106,9 @@ if __name__ == "__main__":
     strip_optimizer(input_path, output_path)
 
     if args.metadata:
-        airport_map_path = Path(args.airport_map) if args.airport_map else Path(args.output).parent / "airport_map.json"
+        airport_map_path = (
+            Path(args.airport_map)
+            if args.airport_map
+            else Path(args.output).parent / "airport_map.json"
+        )
         export_metadata(input_path, Path(args.metadata), airport_map_path)

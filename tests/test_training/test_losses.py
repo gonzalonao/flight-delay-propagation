@@ -32,7 +32,6 @@ from src.evaluation.metrics import (
 )
 from src.training.losses import MultiTaskLoss, WeightedHuberLoss
 
-
 # -- Fixtures ---------------------------------------------------------------
 
 
@@ -57,17 +56,19 @@ def airport_map():
 @pytest.fixture
 def small_window_df():
     """Three airports, different delays for clearly distinct channels."""
-    return pd.DataFrame([
-        # AAA: 4 flights, 3 delayed (>= 15 min), arr_mean = 25
-        {"Dest": "AAA", "ArrDelay": 30.0, "DepDelay": 20.0},
-        {"Dest": "AAA", "ArrDelay": 20.0, "DepDelay": 10.0},
-        {"Dest": "AAA", "ArrDelay": 25.0, "DepDelay": 15.0},
-        {"Dest": "AAA", "ArrDelay": 25.0, "DepDelay": 12.0},
-        # BBB: 2 flights, 0 delayed, arr_mean = 5
-        {"Dest": "BBB", "ArrDelay": 5.0, "DepDelay": 2.0},
-        {"Dest": "BBB", "ArrDelay": 5.0, "DepDelay": 3.0},
-        # CCC: 0 flights in the window → all zeros
-    ])
+    return pd.DataFrame(
+        [
+            # AAA: 4 flights, 3 delayed (>= 15 min), arr_mean = 25
+            {"Dest": "AAA", "ArrDelay": 30.0, "DepDelay": 20.0},
+            {"Dest": "AAA", "ArrDelay": 20.0, "DepDelay": 10.0},
+            {"Dest": "AAA", "ArrDelay": 25.0, "DepDelay": 15.0},
+            {"Dest": "AAA", "ArrDelay": 25.0, "DepDelay": 12.0},
+            # BBB: 2 flights, 0 delayed, arr_mean = 5
+            {"Dest": "BBB", "ArrDelay": 5.0, "DepDelay": 2.0},
+            {"Dest": "BBB", "ArrDelay": 5.0, "DepDelay": 3.0},
+            # CCC: 0 flights in the window → all zeros
+        ]
+    )
 
 
 # -- compute_node_targets_multi_channel -------------------------------------
@@ -102,10 +103,14 @@ class TestComputeNodeTargetsMultiChannel:
     def test_pct_uses_threshold(self, small_window_df, airport_map):
         """A higher threshold reduces the delayed percentage."""
         out_15 = compute_node_targets_multi_channel(
-            small_window_df, airport_map, delay_threshold=15.0,
+            small_window_df,
+            airport_map,
+            delay_threshold=15.0,
         )
         out_30 = compute_node_targets_multi_channel(
-            small_window_df, airport_map, delay_threshold=30.0,
+            small_window_df,
+            airport_map,
+            delay_threshold=30.0,
         )
         # AAA with threshold 30: only 1 flight (arr=30) qualifies → 0.25.
         assert out_15[0, TARGET_CHANNEL_PCT_DELAYED].item() == pytest.approx(1.0)
@@ -159,7 +164,9 @@ class TestMultiTaskLoss:
         loss_a = criterion(pred, target).item()
 
         target_b = target.clone()
-        target_b[..., TARGET_CHANNEL_PCT_DELAYED] = 1.0 - target_b[..., TARGET_CHANNEL_PCT_DELAYED]
+        target_b[..., TARGET_CHANNEL_PCT_DELAYED] = (
+            1.0 - target_b[..., TARGET_CHANNEL_PCT_DELAYED]
+        )
         loss_b = criterion(pred, target_b).item()
 
         assert loss_a == pytest.approx(loss_b, rel=1e-5)
@@ -173,9 +180,7 @@ class TestMultiTaskLoss:
         # Each channel receives a non-zero gradient (the fixture's
         # randomness guarantees the target differs from pred in each channel).
         for c in range(3):
-            assert pred.grad[..., c].abs().sum() > 0, (
-                f"No gradient in channel {c}"
-            )
+            assert pred.grad[..., c].abs().sum() > 0, f"No gradient in channel {c}"
 
     def test_horizon_weights_emphasis(self, multi_task_batch):
         """Raising the last horizon's weight increases its contribution."""
@@ -184,10 +189,13 @@ class TestMultiTaskLoss:
         # Same magnitude across all horizons with an extreme weight.
         emphasised = MultiTaskLoss(
             horizon_weights=[1.0] * (h - 1) + [10.0],
-            aux_weight=0.0, bce_weight=0.0,
+            aux_weight=0.0,
+            bce_weight=0.0,
         )
         flat = MultiTaskLoss(
-            horizon_weights=[1.0] * h, aux_weight=0.0, bce_weight=0.0,
+            horizon_weights=[1.0] * h,
+            aux_weight=0.0,
+            bce_weight=0.0,
         )
         loss_e = emphasised(pred, target).item()
         loss_f = flat(pred, target).item()
@@ -278,8 +286,11 @@ class TestComputeUnifiedMetricsWithBCE:
         pct_logits = np.array([1.0, 1.0, -1.0])
         pct_targets = np.array([0.8, 0.6, 0.1])
         m = compute_unified_metrics(
-            preds, targets, delay_threshold=15.0,
-            pct_logits=pct_logits, pct_targets=pct_targets,
+            preds,
+            targets,
+            delay_threshold=15.0,
+            pct_logits=pct_logits,
+            pct_targets=pct_targets,
         )
         for k in ("mae", "f1", "bce_f1", "bce_accuracy"):
             assert k in m

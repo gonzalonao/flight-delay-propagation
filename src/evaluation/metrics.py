@@ -235,9 +235,7 @@ def compute_unified_metrics(
     out = {**regression, **classification}
 
     if pct_logits is not None and pct_targets is not None:
-        out.update(
-            compute_bce_classification_metrics(pct_logits, pct_targets)
-        )
+        out.update(compute_bce_classification_metrics(pct_logits, pct_targets))
 
     return out
 
@@ -280,9 +278,7 @@ def evaluate_multi_horizon_graph_model(
     for graph in graphs:
         x = graph.x.to(device)
         edge_index = graph.edge_index.to(device)
-        edge_attr = (
-            graph.edge_attr.to(device) if graph.edge_attr is not None else None
-        )
+        edge_attr = graph.edge_attr.to(device) if graph.edge_attr is not None else None
         mask = graph.active_mask
 
         # Output [num_nodes, num_horizons] or [num_nodes, num_horizons, C]
@@ -298,9 +294,7 @@ def evaluate_multi_horizon_graph_model(
 
         for h_idx in range(num_horizons):
             if pred_has_channels:
-                all_preds[h_idx].append(
-                    preds[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY]
-                )
+                all_preds[h_idx].append(preds[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY])
             else:
                 all_preds[h_idx].append(preds[mask_np, h_idx])
 
@@ -311,7 +305,11 @@ def evaluate_multi_horizon_graph_model(
             else:
                 all_targets[h_idx].append(targets_np[mask_np, h_idx])
 
-            if pred_has_channels and target_has_channels and preds.shape[-1] >= NUM_TARGET_CHANNELS:
+            if (
+                pred_has_channels
+                and target_has_channels
+                and preds.shape[-1] >= NUM_TARGET_CHANNELS
+            ):
                 has_pct_head = True
                 all_pct_logits[h_idx].append(
                     preds[mask_np, h_idx, TARGET_CHANNEL_PCT_DELAYED]
@@ -322,8 +320,14 @@ def evaluate_multi_horizon_graph_model(
 
     if not all_preds[0]:
         empty = {
-            "mae": 0.0, "rmse": 0.0, "mape": 0.0, "r2": 0.0,
-            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+            "mae": 0.0,
+            "rmse": 0.0,
+            "mape": 0.0,
+            "r2": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
         }
         result = {}
         for h in prediction_horizons:
@@ -342,12 +346,17 @@ def evaluate_multi_horizon_graph_model(
             pct_logits_h = np.concatenate(all_pct_logits[h_idx])
             pct_targets_h = np.concatenate(all_pct_targets[h_idx])
             metrics_h = compute_unified_metrics(
-                preds_h, targets_h, delay_threshold,
-                pct_logits=pct_logits_h, pct_targets=pct_targets_h,
+                preds_h,
+                targets_h,
+                delay_threshold,
+                pct_logits=pct_logits_h,
+                pct_targets=pct_targets_h,
             )
         else:
             metrics_h = compute_unified_metrics(
-                preds_h, targets_h, delay_threshold,
+                preds_h,
+                targets_h,
+                delay_threshold,
             )
         result[f"horizon_{h}h"] = metrics_h
         all_metrics_for_avg.append(metrics_h)
@@ -355,9 +364,7 @@ def evaluate_multi_horizon_graph_model(
     # Average of the metrics
     avg_metrics: dict[str, float] = {}
     for key in all_metrics_for_avg[0]:
-        avg_metrics[key] = float(
-            np.mean([m[key] for m in all_metrics_for_avg])
-        )
+        avg_metrics[key] = float(np.mean([m[key] for m in all_metrics_for_avg]))
     result["average"] = avg_metrics
 
     return result
@@ -423,9 +430,7 @@ def evaluate_multi_horizon_sequence_model(
 
         for h_idx in range(num_horizons):
             if pred_has_channels:
-                all_preds[h_idx].append(
-                    preds[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY]
-                )
+                all_preds[h_idx].append(preds[mask_np, h_idx, TARGET_CHANNEL_ARR_DELAY])
             else:
                 all_preds[h_idx].append(preds[mask_np, h_idx])
 
@@ -436,7 +441,11 @@ def evaluate_multi_horizon_sequence_model(
             else:
                 all_targets[h_idx].append(targets_np[mask_np, h_idx])
 
-            if pred_has_channels and target_has_channels and preds.shape[-1] >= NUM_TARGET_CHANNELS:
+            if (
+                pred_has_channels
+                and target_has_channels
+                and preds.shape[-1] >= NUM_TARGET_CHANNELS
+            ):
                 has_pct_head = True
                 all_pct_logits[h_idx].append(
                     preds[mask_np, h_idx, TARGET_CHANNEL_PCT_DELAYED]
@@ -447,8 +456,14 @@ def evaluate_multi_horizon_sequence_model(
 
     if not all_preds[0]:
         empty = {
-            "mae": 0.0, "rmse": 0.0, "mape": 0.0, "r2": 0.0,
-            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+            "mae": 0.0,
+            "rmse": 0.0,
+            "mape": 0.0,
+            "r2": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
         }
         result = {}
         for h in prediction_horizons:
@@ -466,21 +481,24 @@ def evaluate_multi_horizon_sequence_model(
             pct_logits_h = np.concatenate(all_pct_logits[h_idx])
             pct_targets_h = np.concatenate(all_pct_targets[h_idx])
             metrics_h = compute_unified_metrics(
-                preds_h, targets_h, delay_threshold,
-                pct_logits=pct_logits_h, pct_targets=pct_targets_h,
+                preds_h,
+                targets_h,
+                delay_threshold,
+                pct_logits=pct_logits_h,
+                pct_targets=pct_targets_h,
             )
         else:
             metrics_h = compute_unified_metrics(
-                preds_h, targets_h, delay_threshold,
+                preds_h,
+                targets_h,
+                delay_threshold,
             )
         result[f"horizon_{h}h"] = metrics_h
         all_metrics_for_avg.append(metrics_h)
 
     avg_metrics: dict[str, float] = {}
     for key in all_metrics_for_avg[0]:
-        avg_metrics[key] = float(
-            np.mean([m[key] for m in all_metrics_for_avg])
-        )
+        avg_metrics[key] = float(np.mean([m[key] for m in all_metrics_for_avg]))
     result["average"] = avg_metrics
 
     return result
@@ -514,9 +532,7 @@ def evaluate_graph_model(
     for graph in graphs:
         x = graph.x.to(device)
         edge_index = graph.edge_index.to(device)
-        edge_attr = (
-            graph.edge_attr.to(device) if graph.edge_attr is not None else None
-        )
+        edge_attr = graph.edge_attr.to(device) if graph.edge_attr is not None else None
         mask = graph.active_mask
 
         # Direct model output (regression, no sigmoid)
@@ -528,8 +544,14 @@ def evaluate_graph_model(
 
     if not all_predictions:
         return {
-            "mae": 0.0, "rmse": 0.0, "mape": 0.0, "r2": 0.0,
-            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+            "mae": 0.0,
+            "rmse": 0.0,
+            "mape": 0.0,
+            "r2": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
         }
 
     predictions = np.concatenate(all_predictions)

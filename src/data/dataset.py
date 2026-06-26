@@ -40,7 +40,8 @@ class FlightDelayDataset(Dataset):
 
         logger.info(
             "Dataset created: %d samples, %d features",
-            len(self.features), self.features.shape[1],
+            len(self.features),
+            self.features.shape[1],
         )
 
     def __len__(self) -> int:
@@ -65,14 +66,26 @@ def get_feature_columns(df: pd.DataFrame, target_col: str = "ArrDelay") -> list[
     """
     # Columns to exclude from training
     exclude = {
-        target_col, "FlightDate", "Airline", "Origin", "Dest",
-        "CRSDepTime", "Cancelled", "Diverted", "Hour", "day_of_week",
-        "Month", "DayOfWeek", "DayofMonth",  # raw Parquet cols (use processed)
+        target_col,
+        "FlightDate",
+        "Airline",
+        "Origin",
+        "Dest",
+        "CRSDepTime",
+        "Cancelled",
+        "Diverted",
+        "Hour",
+        "day_of_week",
+        "Month",
+        "DayOfWeek",
+        "DayofMonth",  # raw Parquet cols (use processed)
     }
 
     feature_cols = [
-        col for col in df.columns
-        if col not in exclude and df[col].dtype in [np.float32, np.float64, np.int64, np.int32]
+        col
+        for col in df.columns
+        if col not in exclude
+        and df[col].dtype in [np.float32, np.float64, np.int64, np.int32]
     ]
 
     logger.info("Selected feature columns: %d", len(feature_cols))

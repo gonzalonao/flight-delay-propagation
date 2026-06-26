@@ -44,9 +44,13 @@ logger = setup_logger(__name__)
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--config", required=True, help="Same YAML used to train the checkpoint")
+    p.add_argument(
+        "--config", required=True, help="Same YAML used to train the checkpoint"
+    )
     p.add_argument("--checkpoint", required=True, help="Existing trained .pt file")
-    p.add_argument("--output-dir", default="outputs", help="Where to write the 3 artifacts")
+    p.add_argument(
+        "--output-dir", default="outputs", help="Where to write the 3 artifacts"
+    )
     return p.parse_args()
 
 
@@ -72,8 +76,11 @@ def main() -> None:
 
     logger.info("Loading data: years=%s", years)
     df = load_multiple_years(
-        data_dir, years, columns=columns,
-        sample_frac=sample_frac, random_seed=seed,
+        data_dir,
+        years,
+        columns=columns,
+        sample_frac=sample_frac,
+        random_seed=seed,
         skip_missing=True,
     )
 
@@ -112,7 +119,8 @@ def main() -> None:
     input_dim = int(sample.x.shape[1])
     edge_dim = (
         int(sample.edge_attr.shape[1])
-        if sample.edge_attr is not None and sample.edge_attr.dim() == 2 else None
+        if sample.edge_attr is not None and sample.edge_attr.dim() == 2
+        else None
     )
 
     meta = {
@@ -120,7 +128,9 @@ def main() -> None:
         "input_dim": input_dim,
         "edge_dim": edge_dim if edge_dim is not None else 5,
         "num_airports": len(airport_map),
-        "prediction_horizons": config.get("graph", {}).get("prediction_horizons", [1, 2, 4, 6, 8]),
+        "prediction_horizons": config.get("graph", {}).get(
+            "prediction_horizons", [1, 2, 4, 6, 8]
+        ),
         "normalize_features": config.get("graph", {}).get("normalize_features", False),
         "loss": config.get("training", {}).get("loss", "mse"),
         "checkpoint_file": f"best_{ckpt_model_name}_inference.pt",

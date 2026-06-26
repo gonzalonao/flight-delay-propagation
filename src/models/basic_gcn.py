@@ -8,7 +8,7 @@ delay (in minutes) of each airport over the next time window.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.nn import GCNConv
 
 
 class BasicGCN(nn.Module):

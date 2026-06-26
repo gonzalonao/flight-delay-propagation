@@ -38,15 +38,18 @@ def _make_graph(timestamp):
     y[:, :, 2] = torch.tensor([[1.0, 0.0], [1.0, 0.0], [0.0, 0.0]])
     active_mask = torch.tensor([True, True, False])
     return Data(
-        x=x, edge_index=edge_index, y=y,
-        active_mask=active_mask, timestamp=timestamp,
+        x=x,
+        edge_index=edge_index,
+        y=y,
+        active_mask=active_mask,
+        timestamp=timestamp,
     )
 
 
 def _fake_out():
     out = torch.zeros(3, 2, 3)
     out[:, :, 0] = torch.tensor([[10.0, 20.0], [5.0, 40.0], [99.0, 99.0]])  # arr delay
-    out[:, :, 2] = torch.tensor([[0.0, 2.0], [-2.0, 0.0], [0.0, 0.0]])      # logits
+    out[:, :, 2] = torch.tensor([[0.0, 2.0], [-2.0, 0.0], [0.0, 0.0]])  # logits
     return out
 
 
@@ -71,8 +74,8 @@ def test_predict_to_frame_schema_and_values():
         & (df.prediction_ts == "2019-10-01T05:00:00")
     ].iloc[0]
     assert row["predicted_arr_delay_min"] == 10.0
-    assert abs(row["pct_arr_delayed_15"] - 0.5) < 1e-6   # sigmoid(0)
-    assert row["target_ts"] == "2019-10-01T06:00:00"     # +1h
+    assert abs(row["pct_arr_delayed_15"] - 0.5) < 1e-6  # sigmoid(0)
+    assert row["target_ts"] == "2019-10-01T06:00:00"  # +1h
     assert row["actual_arr_delay_min"] == 20.0
     assert row["actual_arr_del15"] == 1
 
@@ -82,15 +85,19 @@ def test_predict_to_frame_schema_and_values():
         & (df.prediction_ts == "2019-10-01T05:00:00")
     ].iloc[0]
     assert abs(row4["pct_arr_delayed_15"] - (1 / (1 + np.exp(-2)))) < 1e-6
-    assert row4["target_ts"] == "2019-10-01T09:00:00"    # +4h
+    assert row4["target_ts"] == "2019-10-01T09:00:00"  # +4h
 
 
 def test_predict_to_frame_reference_ts_override():
     model = _FakeSeqModel(_fake_out())  # output with 2 horizons
     g = _make_graph("2019-10-01T05:00:00")
     df = predict_to_frame(
-        model, [[g]], [1, 4], {0: "AAA", 1: "BBB", 2: "CCC"},
-        torch.device("cpu"), include_actuals=False,
+        model,
+        [[g]],
+        [1, 4],
+        {0: "AAA", 1: "BBB", 2: "CCC"},
+        torch.device("cpu"),
+        include_actuals=False,
         reference_ts=pd.Timestamp("2020-01-01T00:00:00"),
     )
     # reference_ts replaces the graph's timestamp in all rows.

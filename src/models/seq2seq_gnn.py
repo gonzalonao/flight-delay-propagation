@@ -129,9 +129,7 @@ class SpatialGATEncoder(nn.Module):
     ) -> None:
         super().__init__()
         if num_layers < 1:
-            raise ValueError(
-                f"num_layers must be >= 1, received {num_layers}"
-            )
+            raise ValueError(f"num_layers must be >= 1, received {num_layers}")
 
         self.dropout = dropout
         self.edge_dim = edge_dim
@@ -263,9 +261,7 @@ class Seq2SeqGNN(nn.Module):
         )
 
         # 2) Temporal encoder (per-node Transformer over T timesteps).
-        self.positional_encoding = _SinusoidalPositionalEncoding(
-            d_model=hidden_dim
-        )
+        self.positional_encoding = _SinusoidalPositionalEncoding(d_model=hidden_dim)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
             nhead=num_heads,
@@ -276,7 +272,8 @@ class Seq2SeqGNN(nn.Module):
             norm_first=True,  # pre-norm: more stable on small batches
         )
         self.temporal_encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=num_temporal_layers,
+            encoder_layer,
+            num_layers=num_temporal_layers,
         )
 
         # 3) Horizon-query decoder.
@@ -323,8 +320,7 @@ class Seq2SeqGNN(nn.Module):
         """
         # 1) Per-snapshot spatial encoding.
         embeddings = [
-            self.spatial_encoder(g.x, g.edge_index, g.edge_attr)
-            for g in sequence
+            self.spatial_encoder(g.x, g.edge_index, g.edge_attr) for g in sequence
         ]
         # Stack list of [N, d] -> [N, T, d].
         spatial = torch.stack(embeddings, dim=1)

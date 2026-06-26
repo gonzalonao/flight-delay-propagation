@@ -57,7 +57,11 @@ def load_preprocessed(config: dict) -> tuple[pd.DataFrame, list[str]]:
     years = config["data"].get("years", [2018])
     columns = config["data"].get("columns")
     df = load_multiple_years(
-        data_dir, years, columns=columns, sample_frac=None, skip_missing=True,
+        data_dir,
+        years,
+        columns=columns,
+        sample_frac=None,
+        skip_missing=True,
     )
     top_n = config.get("graph", {}).get("top_n_airports", 30)
     df, airports = preprocess_pipeline(df, top_n_airports=top_n)
@@ -74,7 +78,9 @@ def _sequences_for_split(graph_splits, split, input_window) -> list:
             logger.warning("Split '%s' has no graphs; skipping.", name)
             continue
         seqs = create_temporal_sequences(graphs, input_window)
-        logger.info("Split '%s': %d graphs -> %d sequences", name, len(graphs), len(seqs))
+        logger.info(
+            "Split '%s': %d graphs -> %d sequences", name, len(graphs), len(seqs)
+        )
         sequences.extend(seqs)
     return sequences
 
@@ -135,8 +141,7 @@ def generate_predictions_from_df(
     input_dim = sample_graph.x.shape[1]
     sample_ea = sample_graph.edge_attr
     edge_dim = (
-        sample_ea.shape[1]
-        if sample_ea is not None and sample_ea.dim() == 2 else None
+        sample_ea.shape[1] if sample_ea is not None and sample_ea.dim() == 2 else None
     )
     model = build_model(config, input_dim, edge_dim=edge_dim)
     info = load_checkpoint(checkpoint_path, model, expected_model_name=model_name)
@@ -147,7 +152,11 @@ def generate_predictions_from_df(
     idx_to_iata = invert_airport_map(airport_map)
 
     preds_df = predict_to_frame(
-        model, sequences, horizons, idx_to_iata, device,
+        model,
+        sequences,
+        horizons,
+        idx_to_iata,
+        device,
         include_actuals=include_actuals,
     )
     logger.info(
@@ -163,11 +172,31 @@ def generate_predictions_from_df(
 def parse_args() -> argparse.Namespace:
     """Parse the command-line arguments."""
     parser = argparse.ArgumentParser(description="Local batch inference (seq2seq_gnn)")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to the .pt checkpoint")
-    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG, help="YAML config (must match the checkpoint)")
-    parser.add_argument("--split", type=str, default="test", choices=SPLIT_CHOICES, help="Temporal split to predict")
-    parser.add_argument("--out", type=str, default="outputs/predictions_local.parquet", help="Parquet output path")
-    parser.add_argument("--no-actuals", action="store_true", help="Do not include ground-truth columns")
+    parser.add_argument(
+        "--checkpoint", type=str, required=True, help="Path to the .pt checkpoint"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=DEFAULT_CONFIG,
+        help="YAML config (must match the checkpoint)",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="test",
+        choices=SPLIT_CHOICES,
+        help="Temporal split to predict",
+    )
+    parser.add_argument(
+        "--out",
+        type=str,
+        default="outputs/predictions_local.parquet",
+        help="Parquet output path",
+    )
+    parser.add_argument(
+        "--no-actuals", action="store_true", help="Do not include ground-truth columns"
+    )
     return parser.parse_args()
 
 
@@ -184,8 +213,12 @@ def main() -> None:
 
     df, airports = load_preprocessed(config)
     preds_df = generate_predictions_from_df(
-        df, airports, config, args.checkpoint,
-        split=args.split, include_actuals=not args.no_actuals,
+        df,
+        airports,
+        config,
+        args.checkpoint,
+        split=args.split,
+        include_actuals=not args.no_actuals,
     )
 
     if preds_df.empty:

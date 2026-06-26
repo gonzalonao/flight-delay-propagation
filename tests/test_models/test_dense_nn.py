@@ -1,7 +1,6 @@
 """Tests for the DenseNN model."""
 
 import torch
-import pytest
 
 from src.models.dense_nn import DenseNN
 

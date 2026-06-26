@@ -1,7 +1,6 @@
 """Tests for the preprocessing module."""
 
 import pandas as pd
-import pytest
 
 from src.data.preprocessing import (
     clean_flights,
@@ -41,7 +40,7 @@ class TestEncodeTime:
         """Check that it extracts the hour from CRSDepTime correctly."""
         result = encode_time(sample_flights_df)
         assert "Hour" in result.columns
-        assert result.loc[0, "Hour"] == 8   # 800 → 8
+        assert result.loc[0, "Hour"] == 8  # 800 → 8
         assert result.loc[2, "Hour"] == 10  # 1000 → 10
 
 

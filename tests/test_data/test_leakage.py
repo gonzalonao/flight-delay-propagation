@@ -14,7 +14,6 @@ if it did, there would be leakage.
 import numpy as np
 import pandas as pd
 import pytest
-import torch
 
 from src.data.graph_builder import build_graph_dataset
 
@@ -45,44 +44,48 @@ def _make_synthetic_df(
     for h in range(24):
         for k in range(flights_per_route_per_hour):
             ad = future_arr_delay if h == 18 else 5.0
-            rows.append({
-                "FlightDate": pd.Timestamp("2018-01-01"),
-                "Airline": "AA",
-                "Origin": "AAA",
-                "Dest": "BBB",
-                "CRSDepTime": h * 100 + k,
-                "CRSArrTime": ((h + 1) % 24) * 100 + k,
-                "CRSElapsedTime": 60,
-                "Distance": 500,
-                "AirTime": 50,
-                "DepDelay": 0.0,
-                "ArrDelay": ad,
-                "TaxiOut": 10.0,
-                "TaxiIn": 5.0,
-                "Cancelled": False,
-                "Diverted": False,
-                "DepDel15": False,
-                "ArrDel15": ad >= 15.0,
-            })
-            rows.append({
-                "FlightDate": pd.Timestamp("2018-01-01"),
-                "Airline": "AA",
-                "Origin": "BBB",
-                "Dest": "CCC",
-                "CRSDepTime": h * 100 + k,
-                "CRSArrTime": ((h + 2) % 24) * 100 + k,
-                "CRSElapsedTime": 120,
-                "Distance": 700,
-                "AirTime": 100,
-                "DepDelay": 0.0,
-                "ArrDelay": 5.0,
-                "TaxiOut": 10.0,
-                "TaxiIn": 5.0,
-                "Cancelled": False,
-                "Diverted": False,
-                "DepDel15": False,
-                "ArrDel15": False,
-            })
+            rows.append(
+                {
+                    "FlightDate": pd.Timestamp("2018-01-01"),
+                    "Airline": "AA",
+                    "Origin": "AAA",
+                    "Dest": "BBB",
+                    "CRSDepTime": h * 100 + k,
+                    "CRSArrTime": ((h + 1) % 24) * 100 + k,
+                    "CRSElapsedTime": 60,
+                    "Distance": 500,
+                    "AirTime": 50,
+                    "DepDelay": 0.0,
+                    "ArrDelay": ad,
+                    "TaxiOut": 10.0,
+                    "TaxiIn": 5.0,
+                    "Cancelled": False,
+                    "Diverted": False,
+                    "DepDel15": False,
+                    "ArrDel15": ad >= 15.0,
+                }
+            )
+            rows.append(
+                {
+                    "FlightDate": pd.Timestamp("2018-01-01"),
+                    "Airline": "AA",
+                    "Origin": "BBB",
+                    "Dest": "CCC",
+                    "CRSDepTime": h * 100 + k,
+                    "CRSArrTime": ((h + 2) % 24) * 100 + k,
+                    "CRSElapsedTime": 120,
+                    "Distance": 700,
+                    "AirTime": 100,
+                    "DepDelay": 0.0,
+                    "ArrDelay": 5.0,
+                    "TaxiOut": 10.0,
+                    "TaxiIn": 5.0,
+                    "Cancelled": False,
+                    "Diverted": False,
+                    "DepDel15": False,
+                    "ArrDel15": False,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -104,7 +107,9 @@ def test_node_features_do_not_leak_future_arr_delay(synthetic_config):
     """Snapshots with current_end ≤ sentinel_arr_ts do not contain its ArrDelay."""
     df = _make_synthetic_df()
     airports = ["AAA", "BBB", "CCC"]
-    graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, synthetic_config)
+    graphs, airport_map, _norm_stats = build_graph_dataset(
+        df, airports, synthetic_config
+    )
     assert len(graphs) > 0
 
     # Sentinel: AAA→BBB flight departing at 18:00 → arr_ts=19:00.
@@ -132,7 +137,9 @@ def test_edge_attr_do_not_leak_future_arr_delay(synthetic_config):
     """recent_route_delay does not include the sentinelled future flight."""
     df = _make_synthetic_df()
     airports = ["AAA", "BBB", "CCC"]
-    graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, synthetic_config)
+    graphs, airport_map, _norm_stats = build_graph_dataset(
+        df, airports, synthetic_config
+    )
     assert len(graphs) > 0
 
     sentinel_arr_ts = pd.Timestamp("2018-01-01 19:00")
@@ -160,7 +167,9 @@ def test_targets_do_use_future_window(synthetic_config):
     """Sanity: the target DOES capture the future flight (not leakage)."""
     df = _make_synthetic_df()
     airports = ["AAA", "BBB", "CCC"]
-    graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, synthetic_config)
+    graphs, airport_map, _norm_stats = build_graph_dataset(
+        df, airports, synthetic_config
+    )
 
     # Sentinel arrives at BBB at 19:00. For the snapshot with
     # current_end=18:00, target h=2 covers [19:00, 20:00) and captures the flight.

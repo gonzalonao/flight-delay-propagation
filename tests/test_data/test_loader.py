@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.data.loader import load_parquet, load_flight_data
+from src.data.loader import load_flight_data, load_parquet
 
 
 class TestLoadParquet:

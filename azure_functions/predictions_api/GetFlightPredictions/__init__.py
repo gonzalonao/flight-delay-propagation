@@ -27,8 +27,8 @@ import azure.functions as func
 
 logger = logging.getLogger(__name__)
 
-WORKSPACE_ID   = os.environ["ONELAKE_WORKSPACE_ID"]
-LAKEHOUSE_ID   = os.environ["ONELAKE_LAKEHOUSE_ID"]
+WORKSPACE_ID = os.environ["ONELAKE_WORKSPACE_ID"]
+LAKEHOUSE_ID = os.environ["ONELAKE_LAKEHOUSE_ID"]
 # Actual hours ahead, matching configs/production.yaml graph.prediction_horizons.
 # The predictions_latest table is in LONG format: one row per
 # (airport_code, horizon_h), so we filter on those columns.
@@ -46,7 +46,9 @@ def _read_prediction(airport: str, horizon: int):
     from azure.identity import DefaultAzureCredential
     from deltalake import DeltaTable
 
-    token = DefaultAzureCredential().get_token("https://storage.azure.com/.default").token
+    token = (
+        DefaultAzureCredential().get_token("https://storage.azure.com/.default").token
+    )
     storage_options = {
         "bearer_token": token,
         "use_fabric_endpoint": "true",

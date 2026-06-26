@@ -77,17 +77,25 @@ def log_multi_horizon_results(
         log.info("  Horizon +%dh:", h)
         log.info(
             "    MAE: %.4f | RMSE: %.4f | MAPE: %.4f%% | R²: %.4f",
-            m["mae"], m["rmse"], m["mape"], m["r2"],
+            m["mae"],
+            m["rmse"],
+            m["mape"],
+            m["r2"],
         )
         log.info(
             "    Cls (regr-thr): Acc=%.4f Prec=%.4f Rec=%.4f F1=%.4f",
-            m["accuracy"], m["precision"], m["recall"], m["f1"],
+            m["accuracy"],
+            m["precision"],
+            m["recall"],
+            m["f1"],
         )
         if has_bce:
             log.info(
                 "    Cls (BCE head): Acc=%.4f Prec=%.4f Rec=%.4f F1=%.4f",
-                m["bce_accuracy"], m["bce_precision"],
-                m["bce_recall"], m["bce_f1"],
+                m["bce_accuracy"],
+                m["bce_precision"],
+                m["bce_recall"],
+                m["bce_f1"],
             )
 
     avg = metrics["average"]

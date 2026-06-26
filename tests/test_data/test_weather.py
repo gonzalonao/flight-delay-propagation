@@ -22,17 +22,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data import weather as weather_mod
 from src.data.weather import (
-    AirportCoord,
     NUM_WEATHER_CATEGORIES,
     WEATHER_SCHEMA_VERSION,
+    AirportCoord,
     bucket_wmo_code,
     fetch_open_meteo,
     load_airport_coords,
     load_weather_for_airports,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -52,8 +50,9 @@ def _make_payload(num_hours: int = 24) -> dict:
             # Representative mix (one code per bucket) in the first hours,
             # padded with 3=clear. Truncated to num_hours so the block is
             # valid even with num_hours < 8.
-            "weather_code": ([0, 1, 45, 51, 63, 71, 80, 95]
-            + [3] * max(0, num_hours - 8))[:num_hours],
+            "weather_code": (
+                [0, 1, 45, 51, 63, 71, 80, 95] + [3] * max(0, num_hours - 8)
+            )[:num_hours],
         }
     }
 
@@ -151,7 +150,10 @@ class TestFetchOpenMeteo:
     def test_parses_payload_into_dataframe(self, tmp_path: Path):
         payload = _make_payload(num_hours=24)
         df = fetch_open_meteo(
-            33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
+            33.64,
+            -84.43,
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
             cache_path=None,
             _http_fetcher=_fake_fetcher_factory(payload),
         )
@@ -167,7 +169,10 @@ class TestFetchOpenMeteo:
         payload = _make_payload(num_hours=8)
         # The first 8 hours of the payload have codes 0,1,45,51,63,71,80,95
         df = fetch_open_meteo(
-            33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
+            33.64,
+            -84.43,
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
             cache_path=None,
             _http_fetcher=_fake_fetcher_factory(payload),
         )
@@ -186,16 +191,24 @@ class TestFetchOpenMeteo:
             return payload
 
         df1 = fetch_open_meteo(
-            33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
-            cache_path=cache_file, _http_fetcher=counting_fetcher,
+            33.64,
+            -84.43,
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
+            cache_path=cache_file,
+            _http_fetcher=counting_fetcher,
         )
         assert cache_file.exists()
         assert calls["n"] == 1
 
         # HIT — must not call the fetcher.
         df2 = fetch_open_meteo(
-            33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
-            cache_path=cache_file, _http_fetcher=counting_fetcher,
+            33.64,
+            -84.43,
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
+            cache_path=cache_file,
+            _http_fetcher=counting_fetcher,
         )
         assert calls["n"] == 1, "The second fetch must read the cache, not HTTP"
         pd.testing.assert_frame_equal(
@@ -209,8 +222,12 @@ class TestFetchOpenMeteo:
             raise urllib.error.URLError("network down")
 
         df = fetch_open_meteo(
-            33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
-            cache_path=None, _http_fetcher=raises,
+            33.64,
+            -84.43,
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
+            cache_path=None,
+            _http_fetcher=raises,
         )
         assert df.empty
         # The canonical columns are still there — the caller fills them with 0.
@@ -219,8 +236,12 @@ class TestFetchOpenMeteo:
 
     def test_empty_payload_returns_empty_dataframe(self):
         df = fetch_open_meteo(
-            33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
-            cache_path=None, _http_fetcher=_fake_fetcher_factory({}),
+            33.64,
+            -84.43,
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
+            cache_path=None,
+            _http_fetcher=_fake_fetcher_factory({}),
         )
         assert df.empty
 
@@ -240,8 +261,11 @@ class TestLoadWeatherForAirports:
             "LAX": AirportCoord("LAX", "Los Angeles", 33.94, -118.41, 38.0),
         }
         df = load_weather_for_airports(
-            ["ATL", "LAX"], dt.date(2018, 6, 1), dt.date(2018, 6, 1),
-            coords=coords, cache_dir=tmp_path,
+            ["ATL", "LAX"],
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
+            coords=coords,
+            cache_dir=tmp_path,
             _http_fetcher=_fake_fetcher_factory(payload),
         )
         assert isinstance(df.index, pd.MultiIndex)
@@ -256,8 +280,11 @@ class TestLoadWeatherForAirports:
         }
         # XXX is not in coords → must be skipped with a warning, not break.
         df = load_weather_for_airports(
-            ["ATL", "XXX"], dt.date(2018, 6, 1), dt.date(2018, 6, 1),
-            coords=coords, cache_dir=tmp_path,
+            ["ATL", "XXX"],
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
+            coords=coords,
+            cache_dir=tmp_path,
             _http_fetcher=_fake_fetcher_factory(payload),
         )
         assert set(df.index.get_level_values("iata").unique()) == {"ATL"}
@@ -270,8 +297,11 @@ class TestLoadWeatherForAirports:
             "ATL": AirportCoord("ATL", "Atlanta", 33.64, -84.43, 313.0),
         }
         df = load_weather_for_airports(
-            ["ATL"], dt.date(2018, 6, 1), dt.date(2018, 6, 1),
-            coords=coords, cache_dir=tmp_path,
+            ["ATL"],
+            dt.date(2018, 6, 1),
+            dt.date(2018, 6, 1),
+            coords=coords,
+            cache_dir=tmp_path,
             _http_fetcher=all_fail,
         )
         assert df.empty
@@ -279,8 +309,14 @@ class TestLoadWeatherForAirports:
         assert df.index.names == ["iata", "timestamp"]
         # The canonical columns are still there so the caller can do
         # ``df.loc[iata, col]`` without tripping on a column KeyError.
-        for col in ("wind_speed_10m", "wind_gusts_10m", "precipitation",
-                    "cloud_cover", "weather_code", "weather_category"):
+        for col in (
+            "wind_speed_10m",
+            "wind_gusts_10m",
+            "precipitation",
+            "cloud_cover",
+            "weather_code",
+            "weather_category",
+        ):
             assert col in df.columns
 
 
@@ -313,12 +349,11 @@ pytest.importorskip("torch_geometric")
 from src.data.graph_builder import (  # noqa: E402  (deliberate late import)
     WEATHER_BLOCK_FUTURE_SIZE_PER_H,
     WEATHER_BLOCK_HIST_SIZE,
-    WeatherLookups,
+    _build_history_lookups,
     _build_weather_lookups,
     _weather_point_obs,
     _weather_window_agg,
     compute_node_features_rich,
-    _build_history_lookups,
 )
 
 
@@ -335,10 +370,14 @@ def _make_synthetic_weather_df() -> pd.DataFrame:
                 "cloud_cover": np.full(48, 50.0, dtype="float32"),
                 # Mix of categories: 0=clear, 4=thunder in hours 10-15
                 "weather_category": np.where(
-                    (np.arange(48) >= 10) & (np.arange(48) < 16), 4, 0,
+                    (np.arange(48) >= 10) & (np.arange(48) < 16),
+                    4,
+                    0,
                 ).astype("int8"),
                 "weather_code": np.where(
-                    (np.arange(48) >= 10) & (np.arange(48) < 16), 95, 0,
+                    (np.arange(48) >= 10) & (np.arange(48) < 16),
+                    95,
+                    0,
                 ).astype("int16"),
             },
             index=times,
@@ -397,7 +436,8 @@ class TestWeatherHelpers:
         wdf = _make_synthetic_weather_df()
         # Only wind active → precip/cloud/category stay at 0.
         lookups = _build_weather_lookups(
-            wdf, enabled_params=frozenset({"wind"}),
+            wdf,
+            enabled_params=frozenset({"wind"}),
         )
         start = pd.Timestamp("2018-06-01 09:00")
         end = pd.Timestamp("2018-06-01 16:00")
@@ -410,8 +450,13 @@ class TestWeatherHelpers:
 
     def test_build_lookups_returns_none_for_empty(self):
         empty = pd.DataFrame(
-            columns=["wind_speed_10m", "wind_gusts_10m", "precipitation",
-                     "cloud_cover", "weather_category"],
+            columns=[
+                "wind_speed_10m",
+                "wind_gusts_10m",
+                "precipitation",
+                "cloud_cover",
+                "weather_category",
+            ],
             index=pd.MultiIndex.from_tuples([], names=["iata", "timestamp"]),
         )
         assert _build_weather_lookups(empty) is None
@@ -428,26 +473,31 @@ class TestFeatureBlockContract:
         for iata_origin, iata_dest in [("AAA", "BBB"), ("BBB", "AAA")]:
             for h in range(48):
                 ts = pd.Timestamp("2018-06-01") + pd.Timedelta(hours=h)
-                rows.append({
-                    "FlightDate": ts.date(),
-                    "Origin": iata_origin,
-                    "Dest": iata_dest,
-                    "CRSDepTime": h * 100,
-                    "CRSArrTime": (h + 1) * 100 % 2400,
-                    "ArrDelay": float(h % 10),
-                    "DepDelay": float(h % 7),
-                    "Distance": 1000.0,
-                    "Cancelled": 0,
-                    "Diverted": 0,
-                })
+                rows.append(
+                    {
+                        "FlightDate": ts.date(),
+                        "Origin": iata_origin,
+                        "Dest": iata_dest,
+                        "CRSDepTime": h * 100,
+                        "CRSArrTime": (h + 1) * 100 % 2400,
+                        "ArrDelay": float(h % 10),
+                        "DepDelay": float(h % 7),
+                        "Distance": 1000.0,
+                        "Cancelled": 0,
+                        "Diverted": 0,
+                    }
+                )
         df = pd.DataFrame(rows)
         df["FlightDate"] = pd.to_datetime(df["FlightDate"])
-        df["timestamp"] = df["FlightDate"] + pd.to_timedelta(df["CRSDepTime"] // 100, unit="h")
+        df["timestamp"] = df["FlightDate"] + pd.to_timedelta(
+            df["CRSDepTime"] // 100, unit="h"
+        )
         df["arr_timestamp"] = df["timestamp"] + pd.Timedelta(hours=1)
         return df
 
     def test_feat_dim_without_weather(self):
         import torch  # local re-import due to skip ordering
+
         df = self._build_flight_df()
         airport_map = {"AAA": 0, "BBB": 1}
         window_delta = pd.Timedelta(hours=1)
@@ -456,7 +506,8 @@ class TestFeatureBlockContract:
         window_df = df[df["timestamp"] < pd.Timestamp("2018-06-01 06:00")]
 
         feats = compute_node_features_rich(
-            window_df, airport_map,
+            window_df,
+            airport_map,
             current_end=pd.Timestamp("2018-06-01 06:00"),
             window_delta=window_delta,
             prediction_horizons=horizons,
@@ -478,7 +529,8 @@ class TestFeatureBlockContract:
         window_df = df[df["timestamp"] < pd.Timestamp("2018-06-01 06:00")]
 
         feats = compute_node_features_rich(
-            window_df, airport_map,
+            window_df,
+            airport_map,
             current_end=pd.Timestamp("2018-06-01 06:00"),
             window_delta=window_delta,
             prediction_horizons=horizons,
@@ -502,7 +554,8 @@ class TestFeatureBlockContract:
         window_df = df[df["timestamp"] < pd.Timestamp("2018-06-01 06:00")]
 
         feats = compute_node_features_rich(
-            window_df, airport_map,
+            window_df,
+            airport_map,
             current_end=pd.Timestamp("2018-06-01 06:00"),
             window_delta=window_delta,
             prediction_horizons=horizons,

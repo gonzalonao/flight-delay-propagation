@@ -26,7 +26,8 @@ logger = setup_logger(__name__)
 
 
 def _align_for_val_channel0(
-    predictions: torch.Tensor, targets: torch.Tensor,
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Align pred/target to the ArrDelay channel for validation.
 
@@ -85,7 +86,8 @@ class GraphTrainer(BaseTrainer):
         )
 
     def _forward_batch(
-        self, batch: Data,
+        self,
+        batch: Data,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Move a graph to the device and run the forward pass.
 
@@ -110,7 +112,9 @@ class GraphTrainer(BaseTrainer):
         return logits, y, active_mask
 
     def _align_for_val(
-        self, predictions: torch.Tensor, targets: torch.Tensor,
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _align_for_val_channel0(predictions, targets)
 
@@ -193,7 +197,8 @@ class SequenceGraphTrainer(BaseTrainer):
         return graph
 
     def _forward_batch(
-        self, batch: list[Data],
+        self,
+        batch: list[Data],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Move a sequence to the device and run the forward pass."""
         seq_on_device = [self._move_graph_to_device(g) for g in batch]
@@ -202,7 +207,9 @@ class SequenceGraphTrainer(BaseTrainer):
         return predictions, last_graph.y, last_graph.active_mask
 
     def _align_for_val(
-        self, predictions: torch.Tensor, targets: torch.Tensor,
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _align_for_val_channel0(predictions, targets)
 

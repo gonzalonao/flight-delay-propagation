@@ -192,9 +192,7 @@ class SpatioTemporalGNN(nn.Module):
         super().__init__()
 
         if output_channels < 1:
-            raise ValueError(
-                f"output_channels must be >= 1, got {output_channels}"
-            )
+            raise ValueError(f"output_channels must be >= 1, got {output_channels}")
 
         self.gnn_hidden = gnn_hidden
         self.lstm_hidden = lstm_hidden

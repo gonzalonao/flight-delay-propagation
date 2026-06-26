@@ -106,8 +106,7 @@ def _make_snapshot() -> Data:
     x = torch.randn(NUM_NODES, INPUT_DIM)
     # Directed chain 0→1→2→3→4 + 3 extra edges for minimal density.
     edge_index = torch.tensor(
-        [[0, 1, 2, 3, 0, 2, 4, 1],
-         [1, 2, 3, 4, 2, 4, 0, 3]],
+        [[0, 1, 2, 3, 0, 2, 4, 1], [1, 2, 3, 4, 2, 4, 0, 3]],
         dtype=torch.long,
     )
     edge_attr = torch.rand(NUM_EDGES, EDGE_DIM)
@@ -118,6 +117,7 @@ def _make_snapshot() -> Data:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_factory_rejects_unknown_model() -> None:
     """``build_model`` must fail with a clear message on an invalid name."""
@@ -150,15 +150,15 @@ def test_tabular_model_smoke(model_name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "model_name", sorted(GRAPH_MODELS - SEQUENCE_MODELS),
+    "model_name",
+    sorted(GRAPH_MODELS - SEQUENCE_MODELS),
 )
 def test_single_snapshot_graph_model_smoke(model_name: str) -> None:
     """BasicGCN, MultiHorizonGAT: forward+backward over 1 snapshot."""
     config = _make_config(model_name)
     snapshot = _make_snapshot()
     edge_dim = (
-        snapshot.edge_attr.shape[1]
-        if model_name in MULTI_HORIZON_MODELS else None
+        snapshot.edge_attr.shape[1] if model_name in MULTI_HORIZON_MODELS else None
     )
     model = build_model(config, input_dim=INPUT_DIM, edge_dim=edge_dim)
     model.train()
@@ -236,7 +236,9 @@ def test_multi_task_smoke(model_name: str) -> None:
     )
 
     criterion = MultiTaskLoss(
-        main_weight=1.0, aux_weight=0.3, bce_weight=0.5,
+        main_weight=1.0,
+        aux_weight=0.3,
+        bce_weight=0.5,
         horizon_weights=[1.0] * NUM_HORIZONS,
     )
     loss = criterion(pred, y_multi)
@@ -253,7 +255,6 @@ def test_multi_task_smoke(model_name: str) -> None:
 def test_checkpoint_roundtrip_with_model_name() -> None:
     """save_checkpoint + load_checkpoint must validate model_name on load."""
     config = _make_config("multi_horizon_gat")
-    snapshot = _make_snapshot()
     model = build_model(config, input_dim=INPUT_DIM, edge_dim=EDGE_DIM)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -271,14 +272,19 @@ def test_checkpoint_roundtrip_with_model_name() -> None:
         # Load with the same name → OK.
         new_model = build_model(config, input_dim=INPUT_DIM, edge_dim=EDGE_DIM)
         load_checkpoint(
-            ckpt_path, new_model, expected_model_name="multi_horizon_gat",
+            ckpt_path,
+            new_model,
+            expected_model_name="multi_horizon_gat",
         )
 
         # Load with a different name → clear error.
         wrong_model = build_model(
-            _make_config("dense_nn"), input_dim=INPUT_DIM,
+            _make_config("dense_nn"),
+            input_dim=INPUT_DIM,
         )
         with pytest.raises(ValueError, match="Architecture mismatch"):
             load_checkpoint(
-                ckpt_path, wrong_model, expected_model_name="dense_nn",
+                ckpt_path,
+                wrong_model,
+                expected_model_name="dense_nn",
             )

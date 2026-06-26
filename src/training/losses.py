@@ -75,9 +75,7 @@ class _WeightedRegressionLossBase(nn.Module):
         """Pointwise error without reduction (same shape as ``targets``)."""
         raise NotImplementedError
 
-    def forward(
-        self, predictions: torch.Tensor, targets: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Apply delay and horizon weighting over the pointwise error.
 
         If ``targets`` has 3 dimensions ``[N, H, C]`` (W2 multi-task
@@ -150,9 +148,7 @@ class WeightedHuberLoss(_WeightedRegressionLossBase):
     def _pointwise_loss(
         self, predictions: torch.Tensor, targets: torch.Tensor
     ) -> torch.Tensor:
-        return F.huber_loss(
-            predictions, targets, reduction="none", delta=self.delta
-        )
+        return F.huber_loss(predictions, targets, reduction="none", delta=self.delta)
 
 
 class MultiTaskLoss(nn.Module):
@@ -223,18 +219,14 @@ class MultiTaskLoss(nn.Module):
             self.horizon_weights = None
 
         if bce_pos_weight is not None:
-            self.register_buffer(
-                "bce_pos_weight", torch.tensor(float(bce_pos_weight))
-            )
+            self.register_buffer("bce_pos_weight", torch.tensor(float(bce_pos_weight)))
         else:
             self.bce_pos_weight = None
 
         # Snapshot of the last forward for logging — does not affect the graph.
         self.last_components: dict[str, float] = {}
 
-    def _weighted_huber(
-        self, pred: torch.Tensor, target: torch.Tensor
-    ) -> torch.Tensor:
+    def _weighted_huber(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Huber weighted by high delay + horizon. Returns a scalar."""
         err = F.huber_loss(pred, target, reduction="none", delta=self.delta)
         weights = torch.ones_like(target)
@@ -244,24 +236,21 @@ class MultiTaskLoss(nn.Module):
             weights = weights * hw.unsqueeze(0)
         return (err * weights).mean()
 
-    def _weighted_bce(
-        self, logits: torch.Tensor, target: torch.Tensor
-    ) -> torch.Tensor:
+    def _weighted_bce(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Horizon-weighted BCEWithLogits (target is already ∈ [0, 1])."""
-        pos_weight = (
-            self.bce_pos_weight if self.bce_pos_weight is not None else None
-        )
+        pos_weight = self.bce_pos_weight if self.bce_pos_weight is not None else None
         err = F.binary_cross_entropy_with_logits(
-            logits, target, reduction="none", pos_weight=pos_weight,
+            logits,
+            target,
+            reduction="none",
+            pos_weight=pos_weight,
         )
         if self.horizon_weights is not None and target.dim() == 2:
             hw = self.horizon_weights.to(target.device)
             err = err * hw.unsqueeze(0)
         return err.mean()
 
-    def forward(
-        self, predictions: torch.Tensor, targets: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Combine the 3 sub-losses with configurable weights."""
         if predictions.dim() != 3 or targets.dim() != 3:
             raise ValueError(
@@ -269,7 +258,10 @@ class MultiTaskLoss(nn.Module):
                 f"received predictions={tuple(predictions.shape)}, "
                 f"targets={tuple(targets.shape)}."
             )
-        if predictions.size(-1) < NUM_TARGET_CHANNELS or targets.size(-1) < NUM_TARGET_CHANNELS:
+        if (
+            predictions.size(-1) < NUM_TARGET_CHANNELS
+            or targets.size(-1) < NUM_TARGET_CHANNELS
+        ):
             raise ValueError(
                 f"Last dim must be >= {NUM_TARGET_CHANNELS} (arr, dep, pct); "
                 f"received pred={predictions.size(-1)}, "

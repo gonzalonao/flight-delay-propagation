@@ -3,7 +3,9 @@
 Loads a checkpoint and runs metrics over the test set.
 
 Usage:
-    python scripts/evaluate.py --checkpoint outputs/best_dense_nn.pt --config configs/default.yaml
+    python scripts/evaluate.py \
+        --checkpoint outputs/best_dense_nn.pt \
+        --config configs/default.yaml
 """
 
 import argparse
@@ -16,7 +18,7 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.dataset import FlightDelayDataset, create_splits, get_feature_columns
+from src.data.dataset import FlightDelayDataset, create_splits
 from src.data.features import build_feature_matrix
 from src.data.graph_builder import (
     build_graph_dataset,
@@ -31,11 +33,11 @@ from src.evaluation.metrics import (
     evaluate_multi_horizon_graph_model,
     evaluate_multi_horizon_sequence_model,
 )
+from src.evaluation.reporting import log_multi_horizon_results, log_test_results
 from src.evaluation.visualization import (
     plot_error_distribution,
     plot_predictions_vs_actual,
 )
-from src.evaluation.reporting import log_multi_horizon_results, log_test_results
 from src.models.factory import (
     GRAPH_MODELS,
     MULTI_HORIZON_MODELS,
@@ -97,8 +99,11 @@ def main() -> None:
     # available — but warn. Loading only years[0] makes val/test (with
     # chronological cutoffs in 2019) empty when years=[2018,2019].
     df = load_multiple_years(
-        data_dir, years, columns=columns,
-        sample_frac=None, skip_missing=True,
+        data_dir,
+        years,
+        columns=columns,
+        sample_frac=None,
+        skip_missing=True,
     )
 
     # --- Preprocessing ---
@@ -108,9 +113,7 @@ def main() -> None:
     device = select_device(config)
     is_multi_horizon = model_name in MULTI_HORIZON_MODELS
 
-    delay_threshold = config.get("evaluation", {}).get(
-        "delay_threshold_minutes", 15
-    )
+    delay_threshold = config.get("evaluation", {}).get("delay_threshold_minutes", 15)
 
     if model_name in GRAPH_MODELS:
         # For single-horizon models, do not pass prediction_horizons
@@ -120,7 +123,9 @@ def main() -> None:
             graph_config["graph"].pop("prediction_horizons", None)
 
         # --- Graph pipeline ---
-        graphs, airport_map, _norm_stats = build_graph_dataset(df, airports, graph_config)
+        graphs, airport_map, _norm_stats = build_graph_dataset(
+            df, airports, graph_config
+        )
         split_cfg = config.get("split", {})
         graph_splits = split_graphs_temporal(
             graphs,
@@ -137,29 +142,32 @@ def main() -> None:
         sample_ea = test_graphs[0].edge_attr
         edge_dim = (
             sample_ea.shape[1]
-            if sample_ea is not None and sample_ea.dim() == 2 else None
+            if sample_ea is not None and sample_ea.dim() == 2
+            else None
         )
         model = build_model(config, input_dim, edge_dim=edge_dim)
 
         checkpoint_info = load_checkpoint(
-            args.checkpoint, model, expected_model_name=model_name,
+            args.checkpoint,
+            model,
+            expected_model_name=model_name,
         )
         logger.info(
             "Checkpoint loaded: epoch %d, metrics=%s",
-            checkpoint_info["epoch"], checkpoint_info["metrics"],
+            checkpoint_info["epoch"],
+            checkpoint_info["metrics"],
         )
 
         model = model.to(device)
 
         if model_name in SEQUENCE_MODELS:
             input_window = config.get("graph", {}).get("input_window", 6)
-            test_sequences = create_temporal_sequences(
-                test_graphs, input_window
-            )
+            test_sequences = create_temporal_sequences(test_graphs, input_window)
             if not test_sequences:
                 logger.error(
                     "No test sequences (graphs=%d, window=%d).",
-                    len(test_graphs), input_window,
+                    len(test_graphs),
+                    input_window,
                 )
                 return
             horizons = config.get("graph", {}).get(
@@ -178,9 +186,7 @@ def main() -> None:
             )
             log_multi_horizon_results(metrics, model_name, horizons, logger)
         else:
-            metrics = evaluate_graph_model(
-                model, test_graphs, device, delay_threshold
-            )
+            metrics = evaluate_graph_model(model, test_graphs, device, delay_threshold)
             log_test_results(metrics, model_name, logger)
 
     else:
@@ -195,20 +201,21 @@ def main() -> None:
         model = build_model(config, input_dim)
 
         checkpoint_info = load_checkpoint(
-            args.checkpoint, model, expected_model_name=model_name,
+            args.checkpoint,
+            model,
+            expected_model_name=model_name,
         )
         logger.info(
             "Checkpoint loaded: epoch %d, metrics=%s",
-            checkpoint_info["epoch"], checkpoint_info["metrics"],
+            checkpoint_info["epoch"],
+            checkpoint_info["metrics"],
         )
 
         model = model.to(device)
 
         test_dataset = FlightDelayDataset(test_features, test_targets)
         batch_size = config["training"].get("batch_size", 512)
-        test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False
-        )
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
         metrics = evaluate_model(model, test_loader, device, delay_threshold)
         log_test_results(metrics, model_name, logger)
