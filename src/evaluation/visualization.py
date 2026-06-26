@@ -99,8 +99,13 @@ def plot_error_distribution(
 
     ax.hist(errors, bins=100, edgecolor="black", alpha=0.7, color="steelblue")
     ax.axvline(x=0, color="red", linestyle="--", linewidth=2)
-    ax.axvline(x=np.mean(errors), color="orange", linestyle="--",
-               linewidth=2, label=f"Mean error: {np.mean(errors):.1f} min")
+    ax.axvline(
+        x=np.mean(errors),
+        color="orange",
+        linestyle="--",
+        linewidth=2,
+        label=f"Mean error: {np.mean(errors):.1f} min",
+    )
 
     ax.set_xlabel("Prediction Error (min)", fontsize=12)
     ax.set_ylabel("Frequency", fontsize=12)

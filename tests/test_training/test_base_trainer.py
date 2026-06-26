@@ -33,26 +33,33 @@ from src.training.graph_trainer import (  # noqa: E402
 )
 from src.training.trainer import Trainer  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Synthetic fixtures
 # ---------------------------------------------------------------------------
 
 
-def _make_tabular_loader(n: int = 32, in_dim: int = 4, batch_size: int = 8) -> DataLoader:
+def _make_tabular_loader(
+    n: int = 32, in_dim: int = 4, batch_size: int = 8
+) -> DataLoader:
     torch.manual_seed(0)
     x = torch.randn(n, in_dim)
     y = (x.sum(dim=1) * 0.5).float()
     return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=False)
 
 
-def _make_graph(num_nodes: int = 6, in_dim: int = 3, multi_horizon: bool = False) -> Data:
+def _make_graph(
+    num_nodes: int = 6, in_dim: int = 3, multi_horizon: bool = False
+) -> Data:
     torch.manual_seed(0)
     x = torch.randn(num_nodes, in_dim)
-    edge_index = torch.tensor(
-        [[i, (i + 1) % num_nodes] for i in range(num_nodes)],
-        dtype=torch.long,
-    ).t().contiguous()
+    edge_index = (
+        torch.tensor(
+            [[i, (i + 1) % num_nodes] for i in range(num_nodes)],
+            dtype=torch.long,
+        )
+        .t()
+        .contiguous()
+    )
     if multi_horizon:
         y = torch.randn(num_nodes, 3)
     else:
@@ -112,13 +119,16 @@ class TestBaseTrainerCoreLoop:
         model = _TinyDense()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = Trainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
         history = trainer.fit(
-            train_loader=loader, val_loader=loader,
-            epochs=2, patience=10,
+            train_loader=loader,
+            val_loader=loader,
+            epochs=2,
+            patience=10,
             checkpoint_path=str(tmp_path / "ckpt.pt"),
             model_name="tiny_dense",
         )
@@ -132,7 +142,8 @@ class TestBaseTrainerCoreLoop:
         model = _TinyGNN()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = GraphTrainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -145,7 +156,8 @@ class TestBaseTrainerCoreLoop:
         model = _TinySeqGNN()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -166,7 +178,8 @@ class TestActiveMaskHandling:
         model = _TinyGNN()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = GraphTrainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -185,7 +198,8 @@ class TestActiveMaskHandling:
         model = _TinyGNN()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = GraphTrainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -222,13 +236,16 @@ class TestEarlyStoppingPath:
         # LR=0 ⇒ no parameter changes ⇒ constant val_loss ⇒ early stop.
         opt = torch.optim.SGD(model.parameters(), lr=0.0)
         trainer = Trainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
         history = trainer.fit(
-            train_loader=loader, val_loader=loader,
-            epochs=20, patience=2,
+            train_loader=loader,
+            val_loader=loader,
+            epochs=20,
+            patience=2,
             checkpoint_path=None,
         )
         assert len(history["train_loss"]) < 20
@@ -242,7 +259,8 @@ class TestSubclassApiBackcompat:
         model = _TinyDense()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = Trainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -253,7 +271,8 @@ class TestSubclassApiBackcompat:
         model = _TinyGNN()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = GraphTrainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -264,13 +283,16 @@ class TestSubclassApiBackcompat:
         model = _TinySeqGNN()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
         trainer.fit(
-            train_sequences=sequences, val_sequences=sequences,
-            epochs=1, patience=5,
+            train_sequences=sequences,
+            val_sequences=sequences,
+            epochs=1,
+            patience=5,
         )
 
 
@@ -281,7 +303,8 @@ class TestBaseTrainerDirectInstantiation:
         model = _TinyDense()
         opt = torch.optim.SGD(model.parameters(), lr=1e-2)
         base = BaseTrainer(
-            model=model, optimizer=opt,
+            model=model,
+            optimizer=opt,
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )

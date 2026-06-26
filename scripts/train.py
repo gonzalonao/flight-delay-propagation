@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 # Add the project root to the path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.dataset import FlightDelayDataset, create_splits, get_feature_columns
+from src.data.dataset import FlightDelayDataset, create_splits
 from src.data.features import build_feature_matrix
 from src.data.graph_builder import (
     build_graph_dataset,
@@ -141,7 +141,9 @@ def _build_criterion(config: dict) -> torch.nn.Module:
             )
             logger.info(
                 "Loss: WeightedMSE (threshold=%.0f min, weight=%.1f%s)",
-                delay_threshold, delay_weight, hw_str,
+                delay_threshold,
+                delay_weight,
+                hw_str,
             )
         else:  # weighted_huber
             delta = training_config.get("huber_delta", 10.0)
@@ -154,7 +156,10 @@ def _build_criterion(config: dict) -> torch.nn.Module:
             logger.info(
                 "Loss: WeightedHuber (delta=%.1f min, threshold=%.0f min, "
                 "weight=%.1f%s)",
-                delta, delay_threshold, delay_weight, hw_str,
+                delta,
+                delay_threshold,
+                delay_weight,
+                hw_str,
             )
         return criterion
 
@@ -180,8 +185,13 @@ def _build_criterion(config: dict) -> torch.nn.Module:
             "Loss: MultiTask (main=%.2f, aux=%.2f, bce=%.2f, "
             "huber_delta=%.1f, threshold=%.0f min, delay_weight=%.1f, "
             "horizon_weights=%s, bce_pos_weight=%s)",
-            criterion.main_weight, criterion.aux_weight, criterion.bce_weight,
-            delta, delay_threshold, delay_weight, horizon_weights,
+            criterion.main_weight,
+            criterion.aux_weight,
+            criterion.bce_weight,
+            delta,
+            delay_threshold,
+            delay_weight,
+            horizon_weights,
             mt_cfg.get("bce_pos_weight"),
         )
         return criterion
@@ -209,7 +219,9 @@ def _save_deployment_artifacts(
     airport_map_path = output_dir / "airport_map.json"
     with open(airport_map_path, "w") as f:
         json.dump(airport_map, f, indent=2)
-    logger.info("airport_map saved: %s (%d airports)", airport_map_path, len(airport_map))
+    logger.info(
+        "airport_map saved: %s (%d airports)", airport_map_path, len(airport_map)
+    )
 
     if norm_stats is not None:
         stats_path = output_dir / "feature_stats.pt"
@@ -226,7 +238,9 @@ def _save_deployment_artifacts(
         "input_dim": None,
         "edge_dim": 5,
         "num_airports": len(airport_map),
-        "prediction_horizons": config.get("graph", {}).get("prediction_horizons", [1, 2, 4, 6, 8]),
+        "prediction_horizons": config.get("graph", {}).get(
+            "prediction_horizons", [1, 2, 4, 6, 8]
+        ),
         "normalize_features": config.get("graph", {}).get("normalize_features", False),
         "loss": config.get("training", {}).get("loss", "mse"),
         "checkpoint_file": f"best_{config['model']['name']}_inference.pt",
@@ -265,9 +279,11 @@ def _train_tabular(config: dict, df, airports: list[str]) -> None:
 
     input_dim = train_features.shape[1]
     model = build_model(config, input_dim)
-    logger.info("Model: %s | Parameters: %d",
-                config["model"]["name"],
-                sum(p.numel() for p in model.parameters()))
+    logger.info(
+        "Model: %s | Parameters: %d",
+        config["model"]["name"],
+        sum(p.numel() for p in model.parameters()),
+    )
 
     device = select_device(config)
 
@@ -335,9 +351,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
     val_graphs = graph_splits["val"]
 
     if not train_graphs:
-        logger.error(
-            "No training graphs. Check the data and the configuration."
-        )
+        logger.error("No training graphs. Check the data and the configuration.")
         return
 
     if not val_graphs:
@@ -362,8 +376,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
     input_dim = train_graphs[0].x.shape[1]
     sample_ea = train_graphs[0].edge_attr
     edge_dim = (
-        sample_ea.shape[1]
-        if sample_ea is not None and sample_ea.dim() == 2 else None
+        sample_ea.shape[1] if sample_ea is not None and sample_ea.dim() == 2 else None
     )
     model = build_model(config, input_dim, edge_dim=edge_dim)
     logger.info(
@@ -417,9 +430,7 @@ def _train_graph(config: dict, df, airports: list[str]) -> None:
             )
             log_multi_horizon_results(metrics, model_name, horizons, logger)
         else:
-            metrics = evaluate_graph_model(
-                model, test_graphs, device, delay_threshold
-            )
+            metrics = evaluate_graph_model(model, test_graphs, device, delay_threshold)
             log_test_results(metrics, model_name, logger)
 
     _save_deployment_artifacts(output_dir, airport_map, norm_stats, config)
@@ -445,12 +456,8 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
 
     # Create sequences per split (avoids leakage between sets)
     input_window = config.get("graph", {}).get("input_window", 6)
-    train_sequences = create_temporal_sequences(
-        graph_splits["train"], input_window
-    )
-    val_sequences = create_temporal_sequences(
-        graph_splits["val"], input_window
-    )
+    train_sequences = create_temporal_sequences(graph_splits["train"], input_window)
+    val_sequences = create_temporal_sequences(graph_splits["val"], input_window)
 
     if not val_sequences:
         # Same logic as in _train_graph: empty val -> silent val_loss=0.
@@ -467,13 +474,16 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
         logger.error(
             "No training sequences. Check the data and the configuration "
             "(input_window=%d, train_graphs=%d).",
-            input_window, len(graph_splits["train"]),
+            input_window,
+            len(graph_splits["train"]),
         )
         return
 
     logger.info(
         "Sequences: train=%d, val=%d (input_window=%d)",
-        len(train_sequences), len(val_sequences), input_window,
+        len(train_sequences),
+        len(val_sequences),
+        input_window,
     )
 
     # input_dim comes from the first graph's node features;
@@ -481,8 +491,7 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
     input_dim = train_sequences[0][0].x.shape[1]
     sample_ea = train_sequences[0][0].edge_attr
     edge_dim = (
-        sample_ea.shape[1]
-        if sample_ea is not None and sample_ea.dim() == 2 else None
+        sample_ea.shape[1] if sample_ea is not None and sample_ea.dim() == 2 else None
     )
     model = build_model(config, input_dim, edge_dim=edge_dim)
     logger.info(
@@ -522,16 +531,12 @@ def _train_sequence_graph(config: dict, df, airports: list[str]) -> None:
     )
 
     # Final evaluation on the test sequences
-    test_sequences = create_temporal_sequences(
-        graph_splits["test"], input_window
-    )
+    test_sequences = create_temporal_sequences(graph_splits["test"], input_window)
     if test_sequences:
         delay_threshold = config.get("evaluation", {}).get(
             "delay_threshold_minutes", 15
         )
-        horizons = config.get("graph", {}).get(
-            "prediction_horizons", [1, 2, 3, 4, 5]
-        )
+        horizons = config.get("graph", {}).get("prediction_horizons", [1, 2, 3, 4, 5])
         metrics = evaluate_multi_horizon_sequence_model(
             model, test_sequences, device, horizons, delay_threshold
         )
@@ -561,16 +566,20 @@ def main() -> None:
     columns = config["data"].get("columns")
     sample_frac = config["data"].get("sample_frac")
 
-    logger.info("Loading data: years=%s, sampling=%.1f%%",
-                years, (sample_frac or 1.0) * 100)
+    logger.info(
+        "Loading data: years=%s, sampling=%.1f%%", years, (sample_frac or 1.0) * 100
+    )
 
     # Load ALL years from the config — the splits' chronological cutoff
     # (train < train_end < val < val_end ≤ test) requires the dates falling
     # in each bucket to be present. If the config says [2018, 2019] but only
     # 2018 is loaded, val/test end up empty and val_loss=0 silently.
     df = load_multiple_years(
-        data_dir, years, columns=columns,
-        sample_frac=sample_frac, random_seed=seed,
+        data_dir,
+        years,
+        columns=columns,
+        sample_frac=sample_frac,
+        random_seed=seed,
         skip_missing=True,
     )
 

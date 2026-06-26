@@ -54,9 +54,9 @@ def test_fact_airport_hour_counts_and_cancellations():
     assert b10["sched_arr"] == 3
     assert b10["arr_operated"] == 2
     assert b10["arr_cancelled"] == 1
-    assert abs(b10["arr_delay_mean"] - 12.5) < 1e-6   # (20+5)/2, NaN excluded
+    assert abs(b10["arr_delay_mean"] - 12.5) < 1e-6  # (20+5)/2, NaN excluded
     assert b10["arr_del15"] == 1
-    assert b10["est_arr_passengers"] == 300           # 3 * 100
+    assert b10["est_arr_passengers"] == 300  # 3 * 100
 
     # Departures from A at 08:00 -> 3 scheduled (800, 830, 800-cancelled).
     a08 = fact[
@@ -71,7 +71,9 @@ def test_fact_airport_hour_counts_and_cancellations():
 def test_dim_date_and_hour():
     dim_date = build_dim_date(pd.Timestamp("2019-10-01"), pd.Timestamp("2019-10-03"))
     assert len(dim_date) == 3
-    assert {"date", "year", "season", "is_weekend", "day_name"}.issubset(dim_date.columns)
+    assert {"date", "year", "season", "is_weekend", "day_name"}.issubset(
+        dim_date.columns
+    )
 
     dim_hour = build_dim_hour()
     assert len(dim_hour) == 24
@@ -94,5 +96,5 @@ def test_enrich_predictions_attaches_volume_and_expected():
         }
     )
     out = enrich_predictions(preds, fact, baseline)
-    assert out.iloc[0]["sched_arr"] == 3                      # B@10:00 -> 3 scheduled
-    assert out.iloc[0]["expected_delayed_flights"] == 1.5     # 0.5 * 3
+    assert out.iloc[0]["sched_arr"] == 3  # B@10:00 -> 3 scheduled
+    assert out.iloc[0]["expected_delayed_flights"] == 1.5  # 0.5 * 3

@@ -170,7 +170,11 @@ def build_feature_matrix(
     numerical_cols = features_config.get("numerical", [])
     # Add temporal features to the normalization
     numerical_cols = numerical_cols + [
-        "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month",
+        "hour_sin",
+        "hour_cos",
+        "dow_sin",
+        "dow_cos",
+        "month",
     ]
     df, scaler = scale_features(df, numerical_cols, scaler)
 

@@ -36,12 +36,17 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
 
 # Models that receive PyG graphs (instead of tabular tensors).
 GRAPH_MODELS: set[str] = {
-    "basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
+    "basic_gcn",
+    "multi_horizon_gat",
+    "spatiotemporal_gnn",
+    "seq2seq_gnn",
 }
 
 # Models that produce a per-horizon target tensor (multi-horizon).
 MULTI_HORIZON_MODELS: set[str] = {
-    "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
+    "multi_horizon_gat",
+    "spatiotemporal_gnn",
+    "seq2seq_gnn",
 }
 
 # Models that process sequences of snapshots (not a single snapshot).
@@ -90,7 +95,8 @@ def build_model(
         )
 
     horizons = (config.get("graph", {}) or {}).get(
-        "prediction_horizons", [1, 2, 4, 6, 8],
+        "prediction_horizons",
+        [1, 2, 4, 6, 8],
     )
 
     # Multi-task (W2): we enable the model's 3 output channels when
@@ -133,10 +139,12 @@ def build_model(
         # no equivalent — the new model uses no LSTM — and is silently
         # ignored so legacy configs do not break.
         hidden_dim = model_config.get(
-            "hidden_dim", model_config.get("gnn_hidden", 128),
+            "hidden_dim",
+            model_config.get("gnn_hidden", 128),
         )
         num_spatial_layers = model_config.get(
-            "num_spatial_layers", model_config.get("num_gnn_layers", 3),
+            "num_spatial_layers",
+            model_config.get("num_gnn_layers", 3),
         )
         num_temporal_layers = model_config.get("num_temporal_layers", 2)
         return Seq2SeqGNN(

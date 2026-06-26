@@ -74,7 +74,8 @@ class BaseTrainer:
     # ------------------------------------------------------------------
 
     def _forward_batch(
-        self, batch: Any,
+        self,
+        batch: Any,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Process a batch and return ``(pred, target, mask | None)``.
 
@@ -89,7 +90,9 @@ class BaseTrainer:
         raise NotImplementedError
 
     def _align_for_val(
-        self, predictions: torch.Tensor, targets: torch.Tensor,
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Hook to align pred/target before the ``val_criterion``.
 
@@ -149,7 +152,8 @@ class BaseTrainer:
 
             if self.gradient_clip > 0:
                 torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.gradient_clip,
+                    self.model.parameters(),
+                    self.gradient_clip,
                 )
 
             self.optimizer.step()
@@ -209,7 +213,8 @@ class BaseTrainer:
         early_stopping = EarlyStopping(patience=patience)
         checkpoint = (
             ModelCheckpoint(checkpoint_path, model_name=model_name)
-            if checkpoint_path else None
+            if checkpoint_path
+            else None
         )
 
         history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
@@ -220,7 +225,8 @@ class BaseTrainer:
 
             if self.scheduler is not None:
                 if isinstance(
-                    self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau,
+                    self.scheduler,
+                    torch.optim.lr_scheduler.ReduceLROnPlateau,
                 ):
                     self.scheduler.step(val_loss)
                 else:
@@ -231,7 +237,10 @@ class BaseTrainer:
 
             logger.info(
                 "Epoch %d/%d | Train Loss: %.4f | Val Loss: %.4f | LR: %.2e",
-                epoch, epochs, train_loss, val_loss,
+                epoch,
+                epochs,
+                train_loss,
+                val_loss,
                 self.optimizer.param_groups[0]["lr"],
             )
 

@@ -8,7 +8,6 @@ from src.data.graph_builder import create_temporal_sequences
 from src.models.spatiotemporal_gnn import GATEncoder, SpatioTemporalGNN
 from src.training.graph_trainer import SequenceGraphTrainer
 
-
 # -- Fixtures ----------------------------------------------------------------
 
 
@@ -20,15 +19,17 @@ def simple_graph():
     num_horizons = 5
     x = torch.randn(num_nodes, input_dim)
     edge_index = torch.tensor(
-        [[0, 1, 1, 2, 2, 3, 0, 3],
-         [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long
+        [[0, 1, 1, 2, 2, 3, 0, 3], [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long
     )
     edge_attr = torch.ones(edge_index.shape[1], 5)
     y = torch.randn(num_nodes, num_horizons)
     active_mask = torch.tensor([True, True, True, False])
     return Data(
-        x=x, edge_index=edge_index, edge_attr=edge_attr,
-        y=y, active_mask=active_mask,
+        x=x,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        y=y,
+        active_mask=active_mask,
     )
 
 
@@ -70,7 +71,10 @@ class TestGATEncoder:
     def test_output_shape(self, simple_graph):
         """Output must be [num_nodes, hidden_channels]."""
         encoder = GATEncoder(
-            input_dim=6, hidden_channels=16, num_heads=2, num_layers=2,
+            input_dim=6,
+            hidden_channels=16,
+            num_heads=2,
+            num_layers=2,
         )
         out = encoder(simple_graph.x, simple_graph.edge_index)
         assert out.shape == (4, 16)
@@ -78,18 +82,26 @@ class TestGATEncoder:
     def test_with_edge_attr(self, simple_graph):
         """Works with multi-channel edge_attr."""
         encoder = GATEncoder(
-            input_dim=6, hidden_channels=16, num_heads=2, num_layers=2,
+            input_dim=6,
+            hidden_channels=16,
+            num_heads=2,
+            num_layers=2,
             edge_dim=5,
         )
         out = encoder(
-            simple_graph.x, simple_graph.edge_index, simple_graph.edge_attr,
+            simple_graph.x,
+            simple_graph.edge_index,
+            simple_graph.edge_attr,
         )
         assert out.shape == (4, 16)
 
     def test_single_layer(self):
         """Encoder with a single GAT layer."""
         encoder = GATEncoder(
-            input_dim=6, hidden_channels=8, num_heads=2, num_layers=1,
+            input_dim=6,
+            hidden_channels=8,
+            num_heads=2,
+            num_layers=1,
         )
         x = torch.randn(4, 6)
         edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
@@ -107,8 +119,12 @@ class TestSpatioTemporalGNN:
     def test_output_shape(self, graph_sequence):
         """Output must be [num_nodes, num_horizons]."""
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=16, lstm_hidden=32,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=16,
+            lstm_hidden=32,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
         model.eval()
         out = model(graph_sequence)
@@ -117,10 +133,20 @@ class TestSpatioTemporalGNN:
     def test_different_configs(self, graph_sequence):
         """Different configurations produce correct shapes."""
         configs = [
-            {"gnn_hidden": 8, "lstm_hidden": 16, "num_heads": 1,
-             "num_gnn_layers": 2, "num_horizons": 3},
-            {"gnn_hidden": 32, "lstm_hidden": 64, "num_heads": 4,
-             "num_gnn_layers": 2, "num_horizons": 5},
+            {
+                "gnn_hidden": 8,
+                "lstm_hidden": 16,
+                "num_heads": 1,
+                "num_gnn_layers": 2,
+                "num_horizons": 3,
+            },
+            {
+                "gnn_hidden": 32,
+                "lstm_hidden": 64,
+                "num_heads": 4,
+                "num_gnn_layers": 2,
+                "num_horizons": 5,
+            },
         ]
         for cfg in configs:
             model = SpatioTemporalGNN(input_dim=6, **cfg)
@@ -131,8 +157,12 @@ class TestSpatioTemporalGNN:
     def test_gradients_flow(self, graph_sequence):
         """Gradients flow through GAT, LSTM and head."""
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=16, lstm_hidden=32,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=16,
+            lstm_hidden=32,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
         out = model(graph_sequence)
         loss = out.sum()
@@ -145,8 +175,12 @@ class TestSpatioTemporalGNN:
     def test_eval_mode_deterministic(self, graph_sequence):
         """In eval mode, the output must be deterministic."""
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=16, lstm_hidden=32,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=16,
+            lstm_hidden=32,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
         model.eval()
         out1 = model(graph_sequence)
@@ -156,8 +190,12 @@ class TestSpatioTemporalGNN:
     def test_variable_sequence_lengths(self):
         """Sequences of different lengths work correctly."""
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=16, lstm_hidden=32,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=16,
+            lstm_hidden=32,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
         model.eval()
 
@@ -166,9 +204,7 @@ class TestSpatioTemporalGNN:
             for _ in range(seq_len):
                 g = Data(
                     x=torch.randn(4, 6),
-                    edge_index=torch.tensor(
-                        [[0, 1], [1, 0]], dtype=torch.long
-                    ),
+                    edge_index=torch.tensor([[0, 1], [1, 0]], dtype=torch.long),
                 )
                 seq.append(g)
             out = model(seq)
@@ -177,8 +213,12 @@ class TestSpatioTemporalGNN:
     def test_output_channels_widens_to_multitask(self, graph_sequence):
         """With output_channels=3 (W2), output is [N, H, 3]."""
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=16, lstm_hidden=32,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=16,
+            lstm_hidden=32,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
             output_channels=3,
         )
         model.eval()
@@ -189,8 +229,12 @@ class TestSpatioTemporalGNN:
         """output_channels < 1 must raise ValueError at construction."""
         with pytest.raises(ValueError, match=">= 1"):
             SpatioTemporalGNN(
-                input_dim=6, gnn_hidden=16, lstm_hidden=32,
-                num_heads=2, num_gnn_layers=2, num_horizons=5,
+                input_dim=6,
+                gnn_hidden=16,
+                lstm_hidden=32,
+                num_heads=2,
+                num_gnn_layers=2,
+                num_horizons=5,
                 output_channels=0,
             )
 
@@ -199,12 +243,19 @@ class TestSpatioTemporalGNN:
         from src.models.multi_horizon_gat import MultiHorizonGAT
 
         gat = MultiHorizonGAT(
-            input_dim=6, hidden_channels=64, num_heads=4,
-            num_layers=2, num_horizons=5,
+            input_dim=6,
+            hidden_channels=64,
+            num_heads=4,
+            num_layers=2,
+            num_horizons=5,
         )
         stgnn = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=64, lstm_hidden=128,
-            num_heads=4, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=64,
+            lstm_hidden=128,
+            num_heads=4,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
 
         gat_params = sum(p.numel() for p in gat.parameters())
@@ -293,12 +344,17 @@ class TestSequenceGraphTrainer:
     def test_train_epoch_runs(self):
         """train_epoch runs without errors and returns a float."""
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=8, lstm_hidden=16,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=8,
+            lstm_hidden=16,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=optimizer,
+            model=model,
+            optimizer=optimizer,
             criterion=torch.nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -311,12 +367,17 @@ class TestSequenceGraphTrainer:
     def test_validate_runs(self):
         """validate runs without errors and returns a float."""
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=8, lstm_hidden=16,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=8,
+            lstm_hidden=16,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=optimizer,
+            model=model,
+            optimizer=optimizer,
             criterion=torch.nn.MSELoss(),
             device=torch.device("cpu"),
         )
@@ -330,12 +391,17 @@ class TestSequenceGraphTrainer:
         """The loss decreases after a few training epochs."""
         torch.manual_seed(42)
         model = SpatioTemporalGNN(
-            input_dim=6, gnn_hidden=8, lstm_hidden=16,
-            num_heads=2, num_gnn_layers=2, num_horizons=5,
+            input_dim=6,
+            gnn_hidden=8,
+            lstm_hidden=16,
+            num_heads=2,
+            num_gnn_layers=2,
+            num_horizons=5,
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(
-            model=model, optimizer=optimizer,
+            model=model,
+            optimizer=optimizer,
             criterion=torch.nn.MSELoss(),
             device=torch.device("cpu"),
         )

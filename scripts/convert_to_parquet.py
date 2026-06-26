@@ -55,15 +55,21 @@ def convert_csv_to_parquet(csv_path: Path, output_path: Path) -> None:
     logger.info("Converting: %s", csv_path.name)
 
     chunks = []
-    for i, chunk in enumerate(pd.read_csv(csv_path, chunksize=CHUNK_SIZE, dtype=DTYPES)):
+    for i, chunk in enumerate(
+        pd.read_csv(csv_path, chunksize=CHUNK_SIZE, dtype=DTYPES)
+    ):
         chunks.append(chunk)
         logger.info("  Chunk %d: %d rows read", i + 1, len(chunk))
 
     df = pd.concat(chunks, ignore_index=True)
     df.to_parquet(output_path, engine="pyarrow", compression="snappy")
 
-    logger.info("  Saved: %s (%d rows, %.1f MB)", output_path.name, len(df),
-                output_path.stat().st_size / 1e6)
+    logger.info(
+        "  Saved: %s (%d rows, %.1f MB)",
+        output_path.name,
+        len(df),
+        output_path.stat().st_size / 1e6,
+    )
 
     del df, chunks
     gc.collect()
@@ -79,7 +85,10 @@ def main() -> None:
 
     if not csv_files:
         logger.warning("No CSV files found in %s", raw_dir)
-        logger.info("If you downloaded the Parquet files directly, this script is not necessary.")
+        logger.info(
+            "If you downloaded the Parquet files directly, "
+            "this script is not necessary."
+        )
         return
 
     for csv_path in csv_files:

@@ -44,7 +44,9 @@ def clean_flights(df: pd.DataFrame) -> pd.DataFrame:
     n_final = len(df)
     logger.info(
         "Cleaning: %d → %d rows (removed %d, %.1f%%)",
-        n_initial, n_final, n_initial - n_final,
+        n_initial,
+        n_final,
+        n_initial - n_final,
         (n_initial - n_final) / max(n_initial, 1) * 100,
     )
 
@@ -70,10 +72,15 @@ def fill_delay_nulls(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with delay nulls filled.
     """
     delay_columns = [
-        "DepDelay", "ArrDelay",
-        "CarrierDelay", "WeatherDelay", "NASDelay",
-        "SecurityDelay", "LateAircraftDelay",
-        "DepDel15", "ArrDel15",
+        "DepDelay",
+        "ArrDelay",
+        "CarrierDelay",
+        "WeatherDelay",
+        "NASDelay",
+        "SecurityDelay",
+        "LateAircraftDelay",
+        "DepDel15",
+        "ArrDel15",
     ]
 
     for col in delay_columns:
@@ -125,7 +132,9 @@ def filter_top_airports(
     # Count total activity per airport (origin + destination)
     origin_counts = df["Origin"].value_counts()
     dest_counts = df["Dest"].value_counts()
-    total_counts = origin_counts.add(dest_counts, fill_value=0).sort_values(ascending=False)
+    total_counts = origin_counts.add(dest_counts, fill_value=0).sort_values(
+        ascending=False
+    )
 
     top_airports = total_counts.head(top_n).index.tolist()
 
@@ -135,7 +144,9 @@ def filter_top_airports(
 
     logger.info(
         "Filtered to top %d airports: %d → %d rows (%.1f%%)",
-        top_n, len(df), len(df_filtered),
+        top_n,
+        len(df),
+        len(df_filtered),
         len(df_filtered) / max(len(df), 1) * 100,
     )
 
@@ -164,7 +175,6 @@ def preprocess_pipeline(
     df = encode_time(df)
     df, airports = filter_top_airports(df, top_n=top_n_airports)
 
-    logger.info("Preprocessing complete: %d rows, %d airports",
-                len(df), len(airports))
+    logger.info("Preprocessing complete: %d rows, %d airports", len(df), len(airports))
 
     return df, airports

@@ -57,9 +57,7 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def _move_sequence_to_device(
-    sequence: list[Data], device: torch.device
-) -> list[Data]:
+def _move_sequence_to_device(sequence: list[Data], device: torch.device) -> list[Data]:
     """Clone and move to ``device`` the tensors of each graph in the sequence.
 
     Replica of the logic in ``evaluate_multi_horizon_sequence_model`` to
@@ -133,9 +131,7 @@ def _frame_from_sequence(
         active_idx = np.arange(preds.shape[0])
 
     # Only nodes with a known IATA (defensive against partial maps).
-    active_idx = np.array(
-        [i for i in active_idx if int(i) in idx_to_iata], dtype=int
-    )
+    active_idx = np.array([i for i in active_idx if int(i) in idx_to_iata], dtype=int)
     if active_idx.size == 0:
         cols = PREDICTION_COLUMNS + (ACTUAL_COLUMNS if include_actuals else [])
         return pd.DataFrame(columns=cols)
@@ -187,7 +183,9 @@ def _frame_from_sequence(
         df["actual_arr_del15"] = (actual_flat >= 15.0).astype(int)
         df["pct_target"] = pct_t.reshape(-1).astype(float)
 
-    return df[PREDICTION_COLUMNS + (ACTUAL_COLUMNS if "actual_arr_delay_min" in df else [])]
+    return df[
+        PREDICTION_COLUMNS + (ACTUAL_COLUMNS if "actual_arr_delay_min" in df else [])
+    ]
 
 
 @torch.no_grad()
@@ -247,6 +245,6 @@ def predict_to_frame(
         return pd.DataFrame(columns=cols)
 
     out = pd.concat(frames, ignore_index=True)
-    return out.sort_values(
-        ["prediction_ts", "airport_code", "horizon_h"]
-    ).reset_index(drop=True)
+    return out.sort_values(["prediction_ts", "airport_code", "horizon_h"]).reset_index(
+        drop=True
+    )

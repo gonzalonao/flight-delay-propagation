@@ -48,15 +48,38 @@ CLASS_A_ROOT = f"{_LH}/live_feed/class_a_schedule"
 BUFFER_ROOT = f"{_LH}/live_feed/rolling_buffer"
 
 CLASS_A_COLS = [
-    "FlightDate", "Airline", "Origin", "Dest",
-    "CRSDepTime", "CRSArrTime", "CRSElapsedTime", "Distance",
-    "Month", "DayOfWeek", "DayofMonth", "Cancelled", "Diverted",
+    "FlightDate",
+    "Airline",
+    "Origin",
+    "Dest",
+    "CRSDepTime",
+    "CRSArrTime",
+    "CRSElapsedTime",
+    "Distance",
+    "Month",
+    "DayOfWeek",
+    "DayofMonth",
+    "Cancelled",
+    "Diverted",
 ]
 CLASS_B_EXTRA = [
-    "DepTime", "ArrTime", "DepDelay", "ArrDelay",
-    "DepDel15", "ArrDel15", "WheelsOff", "WheelsOn",
-    "TaxiOut", "TaxiIn", "AirTime", "ActualElapsedTime",
-    "CarrierDelay", "WeatherDelay", "NASDelay", "SecurityDelay", "LateAircraftDelay",
+    "DepTime",
+    "ArrTime",
+    "DepDelay",
+    "ArrDelay",
+    "DepDel15",
+    "ArrDel15",
+    "WheelsOff",
+    "WheelsOn",
+    "TaxiOut",
+    "TaxiIn",
+    "AirTime",
+    "ActualElapsedTime",
+    "CarrierDelay",
+    "WeatherDelay",
+    "NASDelay",
+    "SecurityDelay",
+    "LateAircraftDelay",
 ]
 CLASS_B_COLS = CLASS_A_COLS + CLASS_B_EXTRA
 
@@ -236,13 +259,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     logger.info("Trim removed %d partitions older than %s", deleted, cutoff)
 
     return func.HttpResponse(
-        json.dumps({
-            "status": "ok",
-            "timestamp": now_utc.isoformat(),
-            "equivalent_2022": equiv_dt.isoformat(),
-            "rows_ingested": rows,
-            "buffer_partitions_deleted": deleted,
-        }),
+        json.dumps(
+            {
+                "status": "ok",
+                "timestamp": now_utc.isoformat(),
+                "equivalent_2022": equiv_dt.isoformat(),
+                "rows_ingested": rows,
+                "buffer_partitions_deleted": deleted,
+            }
+        ),
         status_code=200,
         mimetype="application/json",
     )

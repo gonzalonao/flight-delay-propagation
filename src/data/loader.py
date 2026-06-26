@@ -96,7 +96,8 @@ def load_parquet(
         if missing:
             logger.warning(
                 "  Columns not present in %s (ignored): %s",
-                path.name, ", ".join(missing),
+                path.name,
+                ", ".join(missing),
             )
 
     df = pd.read_parquet(path, columns=columns_to_read, engine="pyarrow")
@@ -104,8 +105,12 @@ def load_parquet(
 
     if sample_frac is not None and 0 < sample_frac < 1.0:
         n_before = len(df)
-        df = df.sample(frac=sample_frac, random_state=random_seed).reset_index(drop=True)
-        logger.info("  Sampling %.1f%%: %d → %d rows", sample_frac * 100, n_before, len(df))
+        df = df.sample(frac=sample_frac, random_state=random_seed).reset_index(
+            drop=True
+        )
+        logger.info(
+            "  Sampling %.1f%%: %d → %d rows", sample_frac * 100, n_before, len(df)
+        )
 
     return df
 
@@ -189,14 +194,19 @@ def load_flight_data(
     # Try Parquet first (more efficient)
     parquet_path = data_dir / f"Combined_Flights_{year}.parquet"
     if parquet_path.exists():
-        return load_parquet(parquet_path, columns=columns,
-                            sample_frac=sample_frac, random_seed=random_seed)
+        return load_parquet(
+            parquet_path,
+            columns=columns,
+            sample_frac=sample_frac,
+            random_seed=random_seed,
+        )
 
     # Fallback to combined annual CSV
     csv_path = data_dir / f"Combined_Flights_{year}.csv"
     if csv_path.exists():
-        return load_csv_chunked(csv_path, columns=columns,
-                                sample_frac=sample_frac, random_seed=random_seed)
+        return load_csv_chunked(
+            csv_path, columns=columns, sample_frac=sample_frac, random_seed=random_seed
+        )
 
     # Fallback to monthly CSVs: Flights_{year}_{month}.csv
     monthly_csvs = sorted(data_dir.glob(f"Flights_{year}_*.csv"))
@@ -204,9 +214,12 @@ def load_flight_data(
         logger.info("Loading %d monthly files for %d", len(monthly_csvs), year)
         dfs = []
         for csv_file in monthly_csvs:
-            chunk_df = load_csv_chunked(csv_file, columns=columns,
-                                        sample_frac=sample_frac,
-                                        random_seed=random_seed)
+            chunk_df = load_csv_chunked(
+                csv_file,
+                columns=columns,
+                sample_frac=sample_frac,
+                random_seed=random_seed,
+            )
             dfs.append(chunk_df)
         result = pd.concat(dfs, ignore_index=True)
         del dfs
@@ -256,15 +269,21 @@ def load_multiple_years(
     loaded_years: list[int] = []
     for year in years:
         try:
-            df = load_flight_data(data_dir, year, columns=columns,
-                                  sample_frac=sample_frac,
-                                  random_seed=random_seed)
+            df = load_flight_data(
+                data_dir,
+                year,
+                columns=columns,
+                sample_frac=sample_frac,
+                random_seed=random_seed,
+            )
         except FileNotFoundError as exc:
             if not skip_missing:
                 raise
             logger.warning(
-                "Year %d not found in %s — skipping (skip_missing=True). "
-                "Detail: %s", year, data_dir, exc,
+                "Year %d not found in %s — skipping (skip_missing=True). Detail: %s",
+                year,
+                data_dir,
+                exc,
             )
             continue
         dfs.append(df)
@@ -283,6 +302,8 @@ def load_multiple_years(
 
     logger.info(
         "Total combined: %d rows from years %s (requested: %s)",
-        len(result), loaded_years, years,
+        len(result),
+        loaded_years,
+        years,
     )
     return result

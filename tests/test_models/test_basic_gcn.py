@@ -15,7 +15,6 @@ from src.data.graph_builder import (
 )
 from src.models.basic_gcn import BasicGCN
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 
@@ -40,15 +39,17 @@ def sample_flight_df():
 
     dates = pd.date_range("2018-01-01", periods=5, freq="D")
 
-    df = pd.DataFrame({
-        "FlightDate": np.random.choice(dates, n),
-        "Origin": np.random.choice(airports, n),
-        "Dest": np.random.choice(airports, n),
-        "DepDelay": np.random.normal(5, 20, n),
-        "ArrDelay": np.random.normal(5, 20, n),
-        "CRSDepTime": np.random.choice(range(600, 2200, 100), n),
-        "Hour": np.random.randint(6, 22, n),
-    })
+    df = pd.DataFrame(
+        {
+            "FlightDate": np.random.choice(dates, n),
+            "Origin": np.random.choice(airports, n),
+            "Dest": np.random.choice(airports, n),
+            "DepDelay": np.random.normal(5, 20, n),
+            "ArrDelay": np.random.normal(5, 20, n),
+            "CRSDepTime": np.random.choice(range(600, 2200, 100), n),
+            "Hour": np.random.randint(6, 22, n),
+        }
+    )
     # Avoid routes from an airport to itself
     mask = df["Origin"] != df["Dest"]
     return df[mask].reset_index(drop=True)
@@ -60,8 +61,9 @@ def simple_graph():
     num_nodes = 4
     input_dim = 6
     x = torch.randn(num_nodes, input_dim)
-    edge_index = torch.tensor([[0, 1, 1, 2, 2, 3, 0, 3],
-                                [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long)
+    edge_index = torch.tensor(
+        [[0, 1, 1, 2, 2, 3, 0, 3], [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long
+    )
     return x, edge_index
 
 
@@ -169,9 +171,7 @@ class TestGraphBuilder:
 
     def test_min_flights_filter(self, sample_flight_df, airport_map):
         """With a high min_flights, fewer edges must be created."""
-        _, attrs_low, _ = build_edge_index(
-            sample_flight_df, airport_map, min_flights=1
-        )
+        _, attrs_low, _ = build_edge_index(sample_flight_df, airport_map, min_flights=1)
         _, attrs_high, _ = build_edge_index(
             sample_flight_df, airport_map, min_flights=100
         )
@@ -201,9 +201,13 @@ class TestGraphBuilder:
             sample_flight_df, airport_map, min_flights=1
         )
         graphs = create_temporal_graphs(
-            sample_flight_df, airport_map, edge_index,
-            edge_attr_static, edge_pairs,
-            window_hours=6, delay_threshold=15.0,
+            sample_flight_df,
+            airport_map,
+            edge_index,
+            edge_attr_static,
+            edge_pairs,
+            window_hours=6,
+            delay_threshold=15.0,
         )
         # With 5 days of data and 6h windows, there should be multiple graphs
         assert len(graphs) > 0
@@ -218,6 +222,7 @@ class TestGraphBuilder:
         """Check the proportions of the temporal split."""
         # Create a mock list of graphs
         from torch_geometric.data import Data
+
         graphs = [Data(x=torch.randn(4, 6)) for _ in range(100)]
 
         splits = split_graphs_temporal(graphs, train_ratio=0.7, val_ratio=0.15)
