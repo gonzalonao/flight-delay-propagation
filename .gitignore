@@ -224,8 +224,13 @@ outputs/
 *.pt
 *.pth
 
-# Run logs (e.g. scripts/run_weekend.ps1 batch queue output)
+# Run logs (batch queue output)
 logs/
+
+# Local-only operator notes / personal batch runner (kept off the public repo)
+scripts/run_weekend.md
+scripts/run_weekend.ps1
+docs/tfm-next-steps.md
 
 # Claude Code project files (machine-specific)
 CLAUDE.md
