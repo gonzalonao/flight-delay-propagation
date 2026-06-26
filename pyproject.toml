@@ -63,6 +63,10 @@ explicit = true
 [tool.ruff]
 line-length = 88
 target-version = "py310"
+# Jupyter/Fabric notebooks are platform artifacts that must round-trip through
+# Fabric's import API unchanged; reformatting them risks invalidating the .ipynb
+# (e.g. cell-id requirements) and adds noise. Lint/format only the .py sources.
+extend-exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
