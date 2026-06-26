@@ -1,12 +1,12 @@
 # =============================================================================
 # Weekend run — SpatioTemporalGNN (small / baseline)
 # =============================================================================
-# Variante "small": replica configs/spatiotemporal_gnn.yaml con dos cambios:
+# "small" variant: replicates configs/spatiotemporal_gnn.yaml with two changes:
 #   - graph.temporal_window_hours: 2 → 1
 #   - weather.enabled: false → true
-# Capacidad: gnn_hidden=64, lstm_hidden=128, num_heads=4, num_gnn_layers=2.
+# Capacity: gnn_hidden=64, lstm_hidden=128, num_heads=4, num_gnn_layers=2.
 #
-# Uso: python scripts/train.py --config configs/weekend/spatiotemporal_gnn_small.yaml
+# Usage: python scripts/train.py --config configs/weekend/spatiotemporal_gnn_small.yaml
 
 data:
   raw_dir: data/raw

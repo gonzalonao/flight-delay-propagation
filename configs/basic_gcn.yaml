@@ -1,7 +1,7 @@
 # =============================================================================
-# Configuración BasicGCN - Test rápido de accuracy
+# BasicGCN configuration - Quick accuracy test
 # =============================================================================
-# Uso: python scripts/train.py --config configs/basic_gcn.yaml
+# Usage: python scripts/train.py --config configs/basic_gcn.yaml
 
 data:
   raw_dir: data/raw
@@ -9,8 +9,8 @@ data:
   years: [2018, 2019]
   sample_frac: null
   random_seed: 42
-  # Ver `configs/default.yaml` para la justificación del agrupamiento
-  # Class A (schedule) vs Class B (actuals) y la nota sobre BTS.
+  # See `configs/default.yaml` for the rationale of the Class A (schedule)
+  # vs Class B (actuals) grouping and the note about BTS columns.
   columns:
     - FlightDate
     - Airline

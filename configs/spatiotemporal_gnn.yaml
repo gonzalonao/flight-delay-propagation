@@ -1,15 +1,15 @@
 # =============================================================================
-# Configuración SpatioTemporalGNN - GAT + LSTM multi-horizonte
+# SpatioTemporalGNN configuration - GAT + LSTM multi-horizon
 # =============================================================================
-# Uso: python scripts/train.py --config configs/spatiotemporal_gnn.yaml
+# Usage: python scripts/train.py --config configs/spatiotemporal_gnn.yaml
 #
-# Cambios respecto a multi_horizon_gat.yaml:
+# Changes from multi_horizon_gat.yaml:
 #   - model: spatiotemporal_gnn (GAT encoder + LSTM + MLP head)
-#   - input_window: 6 (6 snapshots consecutivos como secuencia temporal)
-#   - num_gnn_layers: 2 (menos que GAT puro; LSTM aporta capacidad temporal)
-#   - lstm_hidden: 128 (dimensión del estado oculto LSTM)
-#   - learning_rate: 0.0003 (menor para estabilidad del LSTM)
-#   - patience: 25 (LSTM converge más lento)
+#   - input_window: 6 (6 consecutive snapshots as a temporal sequence)
+#   - num_gnn_layers: 2 (fewer than pure GAT; the LSTM adds temporal capacity)
+#   - lstm_hidden: 128 (LSTM hidden-state dimension)
+#   - learning_rate: 0.0003 (lower for LSTM stability)
+#   - patience: 25 (the LSTM converges more slowly)
 
 data:
   raw_dir: data/raw
@@ -17,8 +17,8 @@ data:
   years: [2018, 2019]
   sample_frac: null
   random_seed: 42
-  # Ver `configs/default.yaml` para la justificación del agrupamiento
-  # Class A (schedule) vs Class B (actuals) y la nota sobre BTS.
+  # See `configs/default.yaml` for the rationale of the Class A (schedule)
+  # vs Class B (actuals) grouping and the note about BTS columns.
   columns:
     - FlightDate
     - Airline
@@ -97,11 +97,11 @@ training:
   patience: 25
   gradient_clip: 1.0
   num_workers: 4
-  # W2: ver multi_horizon_gat.yaml para una explicación de la pérdida.
+  # W2: see multi_horizon_gat.yaml for an explanation of the loss.
   loss: multi_task
   huber_delta: 10.0
   delay_weight: 2.0
-  horizon_weights: [3, 3, 4, 5, 5]  # Favorece horizontes de negocio (4-8 h)
+  horizon_weights: [3, 3, 4, 5, 5]  # Favors business horizons (4-8 h)
   multi_task:
     main_weight: 1.0
     aux_weight: 0.3

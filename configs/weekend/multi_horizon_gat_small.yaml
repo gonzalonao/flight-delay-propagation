@@ -1,12 +1,12 @@
 # =============================================================================
 # Weekend run — MultiHorizonGAT (small / baseline)
 # =============================================================================
-# Variante "small": replica configs/multi_horizon_gat.yaml con dos cambios:
-#   - graph.temporal_window_hours: 2 → 1 (resolución horaria, decisión del run)
-#   - weather.enabled: false → true (Block H habilitado)
-# Sin tocar capacidad del modelo (hidden=64, heads=4, layers=3).
+# "small" variant: replicates configs/multi_horizon_gat.yaml with two changes:
+#   - graph.temporal_window_hours: 2 → 1 (hourly resolution, a run decision)
+#   - weather.enabled: false → true (Block H enabled)
+# Model capacity untouched (hidden=64, heads=4, layers=3).
 #
-# Uso: python scripts/train.py --config configs/weekend/multi_horizon_gat_small.yaml
+# Usage: python scripts/train.py --config configs/weekend/multi_horizon_gat_small.yaml
 
 data:
   raw_dir: data/raw
@@ -69,7 +69,7 @@ split:
 graph:
   top_n_airports: 70
   min_route_flights: 30
-  temporal_window_hours: 1       # 2 → 1 (decisión del weekend run)
+  temporal_window_hours: 1       # 2 → 1 (weekend-run decision)
   input_window: 6
   prediction_horizons: [1, 2, 4, 6, 8]
   normalize_features: true

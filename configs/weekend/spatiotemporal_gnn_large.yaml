@@ -1,14 +1,14 @@
 # =============================================================================
 # Weekend run — SpatioTemporalGNN (large / scaled-up)
 # =============================================================================
-# Variante "large": idéntica a spatiotemporal_gnn_small.yaml salvo capacidad:
+# "large" variant: identical to spatiotemporal_gnn_small.yaml except capacity:
 #   - gnn_hidden: 64 → 128
 #   - lstm_hidden: 128 → 256
-#   - num_heads: 4 → 8 (128/8=16 divide en el bloque GAT)
-#   - num_gnn_layers: 2 (sin cambio)
-# El LSTM ya tiene 1 capa por defecto; mantener para evitar inflar otra dim.
+#   - num_heads: 4 → 8 (128/8=16 divides in the GAT block)
+#   - num_gnn_layers: 2 (unchanged)
+# The LSTM already has 1 layer by default; keep it to avoid inflating another dim.
 #
-# Uso: python scripts/train.py --config configs/weekend/spatiotemporal_gnn_large.yaml
+# Usage: python scripts/train.py --config configs/weekend/spatiotemporal_gnn_large.yaml
 
 data:
   raw_dir: data/raw

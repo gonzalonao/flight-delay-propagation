@@ -1,12 +1,12 @@
 # =============================================================================
 # Weekend run — Seq2SeqGNN (small / baseline)
 # =============================================================================
-# Variante "small": replica configs/seq2seq_gnn.yaml con dos cambios:
+# "small" variant: replicates configs/seq2seq_gnn.yaml with two changes:
 #   - graph.temporal_window_hours: 2 → 1
 #   - weather.enabled: false → true
-# Capacidad: hidden_dim=128, num_heads=4, 3 spatial layers, 2 temporal layers.
+# Capacity: hidden_dim=128, num_heads=4, 3 spatial layers, 2 temporal layers.
 #
-# Uso: python scripts/train.py --config configs/weekend/seq2seq_gnn_small.yaml
+# Usage: python scripts/train.py --config configs/weekend/seq2seq_gnn_small.yaml
 
 data:
   raw_dir: data/raw

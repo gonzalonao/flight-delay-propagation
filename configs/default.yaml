@@ -1,22 +1,22 @@
 # =============================================================================
-# Configuración por defecto - Flight Delay Propagation
+# Default configuration - Flight Delay Propagation
 # =============================================================================
 
 data:
   raw_dir: data/raw
   processed_dir: data/processed
-  years: [2018, 2019]            # Dos años completos cubren ~14M vuelos
-  sample_frac: null              # Sin muestreo: usa el dataset completo
+  years: [2018, 2019]            # Two full years cover ~14M flights
+  sample_frac: null              # No sampling: use the full dataset
   random_seed: 42
-  # Columnas relevantes del dataset de Kaggle (Combined_Flights, BTS On-Time).
-  # Agrupadas por disponibilidad temporal — ver `src/data/loader.py` y la
-  # invariante de leakage en `src/data/graph_builder.py`.
-  # Nota: algunos Parquets (sobre todo años antiguos) no contienen las
-  # columnas BTS de causa de retraso. `load_parquet` ignora silenciosamente
-  # las columnas ausentes y avisa por log; los modelos deben tolerar
-  # ausencia rellenando con 0 vía `fill_delay_nulls`.
+  # Relevant columns from the Kaggle dataset (Combined_Flights, BTS On-Time).
+  # Grouped by temporal availability — see `src/data/loader.py` and the
+  # leakage invariant in `src/data/graph_builder.py`.
+  # Note: some Parquet files (especially older years) do not contain the
+  # BTS delay-cause columns. `load_parquet` silently ignores missing
+  # columns and logs a warning; models must tolerate their absence by
+  # filling with 0 via `fill_delay_nulls`.
   columns:
-    # Identificadores y schedule (Class A — known a priori)
+    # Identifiers and schedule (Class A — known a priori)
     - FlightDate
     - Airline
     - Origin
@@ -30,7 +30,7 @@ data:
     - DayofMonth
     - Cancelled
     - Diverted
-    # Actuales (Class B — solo válidas para ventanas de input históricas)
+    # Actuals (Class B — only valid for historical input windows)
     - DepTime
     - ArrTime
     - DepDelay
@@ -43,7 +43,7 @@ data:
     - TaxiIn
     - AirTime
     - ActualElapsedTime
-    # Descomposición BTS de causas (Class B)
+    # BTS delay-cause breakdown (Class B)
     - CarrierDelay
     - WeatherDelay
     - NASDelay
@@ -66,47 +66,47 @@ features:
     - AirTime
 
 split:
-  method: temporal               # Separación temporal cronológica
-  # Cortes por fecha ISO (preferido cuando hay varios años). Cubre
+  method: temporal               # Chronological temporal split
+  # ISO date cutoffs (preferred when spanning several years). Covers
   # 2018-01-01 → 2019-12-31: ~75% train, ~12% val, ~13% test.
   train_end: "2019-07-01"
   val_end:   "2019-10-01"
 
 graph:
-  top_n_airports: 70             # ~95% de las salidas de pasajeros en EE.UU.
-  min_route_flights: 30          # Permite rutas menos densas para grafo más rico
-  temporal_window_hours: 1       # Resolución temporal de los snapshots
-  input_window: 6                # Horas de historia como input
-  prediction_horizons: [1, 2, 4, 6, 8]  # Horas futuras (h=4/6/8 son los objetivos de negocio)
-  cache_dir: data/processed/snapshots   # Caché de snapshots; null para desactivar
+  top_n_airports: 70             # ~95% of U.S. passenger departures
+  min_route_flights: 30          # Allows less dense routes for a richer graph
+  temporal_window_hours: 1       # Temporal resolution of the snapshots
+  input_window: 6                # Hours of history used as input
+  prediction_horizons: [1, 2, 4, 6, 8]  # Future hours (h=4/6/8 are the business targets)
+  cache_dir: data/processed/snapshots   # Snapshot cache; null to disable
 
 # =============================================================================
-# Meteorología (bloque H de features de nodo, opcional)
+# Weather (node-feature block H, optional)
 # =============================================================================
-# Cuando ``enabled: true`` el builder llama a Open-Meteo Historical (ERA5)
-# para cada aeropuerto en ``airports`` y añade 9 + 9·len(prediction_horizons)
-# features por nodo:
-#   Histórico (sobre la ventana de input):
+# When ``enabled: true`` the builder calls Open-Meteo Historical (ERA5)
+# for each airport in ``airports`` and adds 9 + 9·len(prediction_horizons)
+# features per node:
+#   Historical (over the input window):
 #     mean wind_speed_10m, max wind_gusts_10m, sum precipitation,
-#     mean cloud_cover, one-hot de la categoría WMO dominante (5 clases).
-#   Futuro (por horizonte, observación a T + (h-0.5)·W):
-#     wind_speed, gust, precip, cloud, one-hot de la categoría observada.
+#     mean cloud_cover, one-hot of the dominant WMO category (5 classes).
+#   Future (per horizon, observation at T + (h-0.5)·W):
+#     wind_speed, gust, precip, cloud, one-hot of the observed category.
 #
-# Coordenadas: ``src/data/reference/airport_coords.csv`` (top-70 EE.UU.).
-# Aeropuertos sin entrada se omiten con warning — sus features quedan a 0
-# (no-señal), el entrenamiento NO se rompe.
+# Coordinates: ``src/data/reference/airport_coords.csv`` (top-70 U.S.).
+# Airports without an entry are skipped with a warning — their features
+# stay at 0 (no signal), training does NOT break.
 #
-# Cache HTTP en disco: un parquet por (iata, start_date, end_date) bajo
-# ``cache_dir``. La caché evita repetir descargas entre runs y entre
-# splits train/val/test.
+# On-disk HTTP cache: one parquet per (iata, start_date, end_date) under
+# ``cache_dir``. The cache avoids repeating downloads between runs and
+# across train/val/test splits.
 #
-# Toggle de grupos (para ablaciones individuales, ver OPTIMIZATIONS.md):
+# Group toggles (for individual ablations, see docs/ablation-log.md):
 #   - wind            → mean wind + max gust
 #   - precip_cloud    → sum precip + mean cloud cover
-#   - category        → one-hot de categoría WMO (clear/fog/rain/snow/thunder)
+#   - category        → one-hot WMO category (clear/fog/rain/snow/thunder)
 weather:
-  enabled: false                 # off por defecto: el primer run sin red sigue funcionando
-  provider: open_meteo           # único valor soportado de momento
+  enabled: false                 # off by default: the first network-free run still works
+  provider: open_meteo           # only supported value for now
   cache_dir: data/processed/weather
   params:
     - wind
@@ -141,10 +141,10 @@ model:
     dropout: 0.3
   seq2seq_gnn:
     # Spatio-Temporal Transformer redesigned in W3:
-    #   - GAT spatial encoder con residuales pre-norm + GELU
-    #   - Transformer temporal encoder (sustituye al LSTM)
-    #   - Decoder de queries por horizonte (sin teacher forcing)
-    # ``hidden_dim`` debe ser divisible por ``num_heads``.
+    #   - GAT spatial encoder with pre-norm residuals + GELU
+    #   - Transformer temporal encoder (replaces the LSTM)
+    #   - Per-horizon query decoder (no teacher forcing)
+    # ``hidden_dim`` must be divisible by ``num_heads``.
     hidden_dim: 128
     num_heads: 4
     num_spatial_layers: 3
@@ -160,38 +160,38 @@ training:
   patience: 15                   # Early stopping
   gradient_clip: 1.0
   num_workers: 4
-  device: auto                   # auto | cuda | cpu — ver GPU_SETUP.md.
-                                 # 'cuda' falla duro si no hay GPU disponible
-                                 # (recomendado para evitar runs en CPU
-                                 # silenciosos). 'auto' cae a CPU con warning.
-  # Soportadas: mse | weighted_mse | weighted_huber | multi_task.
-  # ``multi_task`` (W2) sólo tiene efecto en multi_horizon_gat,
-  # spatiotemporal_gnn y seq2seq_gnn — el factory los crea con
-  # output_channels=3 al verla. Para baselines (DenseNN, BasicGCN) usa
-  # mse o weighted_huber.
+  device: auto                   # auto | cuda | cpu — see docs/gpu-setup.md.
+                                 # 'cuda' fails hard if no GPU is available
+                                 # (recommended to avoid silent CPU runs).
+                                 # 'auto' falls back to CPU with a warning.
+  # Supported: mse | weighted_mse | weighted_huber | multi_task.
+  # ``multi_task`` (W2) only takes effect for multi_horizon_gat,
+  # spatiotemporal_gnn and seq2seq_gnn — the factory builds them with
+  # output_channels=3 when it sees it. For baselines (DenseNN, BasicGCN)
+  # use mse or weighted_huber.
   # loss: multi_task
   multi_task:
-    main_weight: 1.0   # Huber sobre ArrDelay (canal 0) — target principal
-    aux_weight: 0.3    # Huber sobre DepDelay aux (canal 1) — regularizador
-    bce_weight: 0.5    # BCE sobre pct_arr_delayed_15 (canal 2) — Precision/Recall/F1
-    bce_pos_weight: null  # subir (e.g. 2.0) si recall queda por debajo de precision
+    main_weight: 1.0   # Huber on ArrDelay (channel 0) — primary target
+    aux_weight: 0.3    # Huber on DepDelay aux (channel 1) — regularizer
+    bce_weight: 0.5    # BCE on pct_arr_delayed_15 (channel 2) — Precision/Recall/F1
+    bce_pos_weight: null  # raise (e.g. 2.0) if recall stays below precision
 
 evaluation:
   metrics: [mae, rmse, mape, r2]
-  delay_threshold_minutes: 15    # Umbral para clasificación binaria
+  delay_threshold_minutes: 15    # Threshold for binary classification
 
 # =============================================================================
-# Export para Power BI (scripts/export_powerbi.py)
+# Power BI export (scripts/export_powerbi.py)
 # =============================================================================
-# Genera el esquema en estrella bajo ``out_dir`` (dim_airport, dim_date,
-# dim_hour, fact_airport_hour, agg_baseline_volume, agg_* y fact_predictions).
-# ``seats_per_flight`` habilita columnas de pasajeros ESTIMADOS (proxy =
-# vuelos x asientos); ponlo a null/0 para omitirlas. El dataset no contiene
-# conteos reales de pasajeros — es flight-level — por eso es una estimación.
+# Generates the star schema under ``out_dir`` (dim_airport, dim_date,
+# dim_hour, fact_airport_hour, agg_baseline_volume, agg_* and fact_predictions).
+# ``seats_per_flight`` enables ESTIMATED passenger columns (proxy =
+# flights x seats); set it to null/0 to omit them. The dataset does not
+# contain real passenger counts — it is flight-level — so this is an estimate.
 powerbi:
   out_dir: outputs/powerbi
-  seats_per_flight: 130          # estimación media US doméstico; null/0 = omitir
-  prediction_split: test         # split temporal a predecir para fact_predictions
+  seats_per_flight: 130          # average US domestic estimate; null/0 = omit
+  prediction_split: test         # temporal split to predict for fact_predictions
 
 reproducibility:
   seed: 42

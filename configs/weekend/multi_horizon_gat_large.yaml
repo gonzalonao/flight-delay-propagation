@@ -1,13 +1,13 @@
 # =============================================================================
 # Weekend run — MultiHorizonGAT (large / scaled-up)
 # =============================================================================
-# Variante "large": idéntica a multi_horizon_gat_small.yaml salvo capacidad:
+# "large" variant: identical to multi_horizon_gat_small.yaml except capacity:
 #   - hidden_channels: 64 → 128
-#   - num_heads: 4 → 8 (128 / 8 = 16 divide limpio)
-#   - num_layers: 3 (sin cambio — añadir capas en GAT suele dañar antes)
-# Tests si más parámetros ayudan en h=4/6/8 ahora que hay weather + lags.
+#   - num_heads: 4 → 8 (128 / 8 = 16 divides cleanly)
+#   - num_layers: 3 (unchanged — adding GAT layers tends to hurt first)
+# Tests whether more parameters help at h=4/6/8 now that weather + lags exist.
 #
-# Uso: python scripts/train.py --config configs/weekend/multi_horizon_gat_large.yaml
+# Usage: python scripts/train.py --config configs/weekend/multi_horizon_gat_large.yaml
 
 data:
   raw_dir: data/raw

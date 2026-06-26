@@ -1,14 +1,14 @@
 # =============================================================================
 # Weekend run — Seq2SeqGNN (large / scaled-up)
 # =============================================================================
-# Variante "large": idéntica a seq2seq_gnn_small.yaml salvo capacidad:
+# "large" variant: identical to seq2seq_gnn_small.yaml except capacity:
 #   - hidden_dim: 128 → 256
-#   - num_heads: 4 → 8 (256/8=32 divide)
-#   - num_spatial_layers: 3 (sin cambio)
-#   - num_temporal_layers: 2 (sin cambio)
-# Sólo escalamos ancho; añadir capas temporales sin más datos tiende a overfit.
+#   - num_heads: 4 → 8 (256/8=32 divides)
+#   - num_spatial_layers: 3 (unchanged)
+#   - num_temporal_layers: 2 (unchanged)
+# We scale width only; adding temporal layers without more data tends to overfit.
 #
-# Uso: python scripts/train.py --config configs/weekend/seq2seq_gnn_large.yaml
+# Usage: python scripts/train.py --config configs/weekend/seq2seq_gnn_large.yaml
 
 data:
   raw_dir: data/raw

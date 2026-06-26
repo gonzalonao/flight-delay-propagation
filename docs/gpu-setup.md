@@ -1,99 +1,98 @@
-# GPU Setup — RTX 5070 (Blackwell) y otras GPUs NVIDIA
+# GPU Setup — RTX 5070 (Blackwell) and other NVIDIA GPUs
 
-Esta guía resuelve el problema más común al lanzar entrenamientos:
-**`torch.cuda.is_available()` devuelve `False` (o `True` pero el modelo
-sigue corriendo en CPU)**.
+This guide fixes the most common problem when launching training:
+**`torch.cuda.is_available()` returns `False` (or `True`, but the model
+keeps running on CPU)**.
 
 ## TL;DR
 
 ```bash
-# Hardware soportado: cualquier GPU NVIDIA con driver >= 525.
-# RTX 5070 / 5080 / 5090 (Blackwell, sm_120) requieren wheels CUDA 12.8+.
-# RTX 30xx / 40xx funcionan con cu121 o cu124, pero cu128 también vale.
+# Supported hardware: any NVIDIA GPU with driver >= 525.
+# RTX 5070 / 5080 / 5090 (Blackwell, sm_120) require CUDA 12.8+ wheels.
+# RTX 30xx / 40xx work with cu121 or cu124, but cu128 works too.
 
 pip uninstall -y torch torchvision torch-geometric torch-scatter torch-sparse torch-cluster
 pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
 pip install torch_geometric
 ```
 
-Verifica:
+Verify:
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no gpu')"
 ```
 
-Salida esperada en la 5070:
+Expected output on the 5070:
 
 ```
 2.6.0+cu128  12.8  True  NVIDIA GeForce RTX 5070
 ```
 
-## Forzar GPU desde el config
+## Force GPU from the config
 
-Por defecto los scripts usan `device: auto` (CUDA si está, si no CPU con
-warning). Para que un entrenamiento **falle si no hay GPU** en lugar de
-caer silenciosamente a CPU (que era lo que enmascaraba runs lentos antes
-del fix), añade en el YAML del modelo:
+By default the scripts use `device: auto` (CUDA if present, otherwise CPU with
+a warning). To make a training run **fail when no GPU is available** instead of
+silently falling back to CPU (which is what masked slow runs before the fix),
+add this to the model's YAML:
 
 ```yaml
 training:
   device: cuda    # auto | cuda | cpu
 ```
 
-Con `device: cuda`, si `torch.cuda.is_available()` es `False` el script
-lanza un `RuntimeError` con instrucciones concretas (build CPU-only,
-wheels antiguos, driver desactualizado…) en lugar de seguir adelante
-en CPU.
+With `device: cuda`, if `torch.cuda.is_available()` is `False` the script
+raises a `RuntimeError` with concrete instructions (CPU-only build, stale
+wheels, outdated driver, …) instead of carrying on with the CPU.
 
-## Diagnóstico
+## Diagnosis
 
-Si tras instalar cu128 sigues sin ver la GPU, consulta el log del primer
-arranque. `select_device()` ahora imprime:
-
-```
-Dispositivo: cuda:0 (NVIDIA GeForce RTX 5070, sm_120, 12.0 GB, torch CUDA build=12.8)
-```
-
-Si sale algo como esto:
+If you still don't see the GPU after installing cu128, check the first-boot
+log. `select_device()` now prints:
 
 ```
-Dispositivo: cpu (CUDA no disponible).
+Device: cuda:0 (NVIDIA GeForce RTX 5070, sm_120, 12.0 GB, torch CUDA build=12.8)
+```
+
+If you see something like this:
+
+```
+Device: cpu (CUDA unavailable).
   torch version: 2.5.0+cpu | CUDA build: None
 ```
 
-→ El wheel instalado es **CPU-only**. Reinstala con el index-url cu128
-de arriba.
+→ The installed wheel is **CPU-only**. Reinstall using the cu128 index-url
+above.
 
-Si sale:
+If you see:
 
 ```
-GPU Blackwell (sm_120) detectada con torch CUDA build 12.1. Es probable
-que las operaciones fallen en runtime: instala wheels cu128.
+Blackwell GPU (sm_120) detected with torch CUDA build 12.1. Operations will
+likely fail at runtime: install cu128 wheels.
 ```
 
-→ Tienes wheels antiguos. PyTorch detecta la GPU pero no tiene kernels
-para sm_120 — el primer `.cuda()` real reventará. Igualmente, reinstala
-con cu128.
+→ You have stale wheels. PyTorch detects the GPU but has no kernels for
+sm_120 — the first real `.cuda()` call will crash. Reinstall with cu128
+anyway.
 
 ## Fallback: Colab
 
-Si la 5070 no se puede activar a tiempo (driver, permisos, etc.),
-sube los snapshots cacheados a Drive y entrena en Colab:
+If the 5070 can't be enabled in time (driver, permissions, etc.), upload the
+cached snapshots to Drive and train on Colab:
 
 ```python
-# En Colab
+# On Colab
 !pip install torch_geometric
-# torch ya viene con cu121 en Colab; suficiente para T4/L4/A100.
+# torch already ships with cu121 on Colab; enough for T4/L4/A100.
 ```
 
-El caché de snapshots (`data/processed/snapshots/snapshots_<hash>.pt`)
-es portable: si subes el `.pt` a Drive y montas Drive en Colab,
-`build_graph_dataset` hace **HIT en caché** y la fase de preprocesado
-desaparece — el bottleneck pasa a ser data-loader, no construcción de
-features.
+The snapshot cache (`data/processed/snapshots/snapshots_<hash>.pt`) is
+portable: if you upload the `.pt` to Drive and mount Drive in Colab,
+`build_graph_dataset` gets a **cache HIT** and the preprocessing phase
+disappears — the bottleneck becomes the data loader, not feature
+construction.
 
-## Fallback: CPU (Ryzen 7 9700X)
+## Fallback: CPU
 
-Funciona, pero es ~10–20× más lento. Útil para depurar el pipeline,
-no para la corrida final del TFM. Asegúrate de cachear snapshots
-primero (un solo build vale para todas las re-ejecuciones siguientes).
+Works, but is ~10–20× slower. Useful for debugging the pipeline, not for the
+final training run. Make sure to cache the snapshots first (a single build
+serves all subsequent re-runs).
