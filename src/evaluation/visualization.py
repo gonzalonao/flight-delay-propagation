@@ -1,7 +1,7 @@
-"""Funciones de visualización para resultados de entrenamiento y evaluación.
+"""Visualization functions for training and evaluation results.
 
-Genera gráficos de curvas de entrenamiento, distribución de errores
-y predicciones vs valores reales.
+Generates plots of training curves, error distributions and predictions vs
+actual values.
 """
 
 from pathlib import Path
@@ -14,11 +14,11 @@ def plot_training_history(
     history: dict[str, list[float]],
     save_path: str | Path | None = None,
 ) -> None:
-    """Grafica las curvas de pérdida de entrenamiento y validación.
+    """Plot the training and validation loss curves.
 
     Args:
-        history: Diccionario con listas 'train_loss' y 'val_loss'.
-        save_path: Ruta donde guardar la figura (opcional).
+        history: Dictionary with 'train_loss' and 'val_loss' lists.
+        save_path: Path where the figure is saved (optional).
     """
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -44,15 +44,15 @@ def plot_predictions_vs_actual(
     save_path: str | Path | None = None,
     max_points: int = 5000,
 ) -> None:
-    """Scatter plot de predicciones vs valores reales.
+    """Scatter plot of predictions vs actual values.
 
     Args:
-        predictions: Predicciones del modelo.
-        targets: Valores reales.
-        save_path: Ruta donde guardar la figura (opcional).
-        max_points: Máximo de puntos a mostrar (muestreo si hay más).
+        predictions: Model predictions.
+        targets: Ground-truth values.
+        save_path: Path where the figure is saved (optional).
+        max_points: Maximum number of points to show (sampled if more).
     """
-    # Muestrear si hay demasiados puntos
+    # Sample if there are too many points
     if len(predictions) > max_points:
         idx = np.random.choice(len(predictions), max_points, replace=False)
         predictions = predictions[idx]
@@ -62,7 +62,7 @@ def plot_predictions_vs_actual(
 
     ax.scatter(targets, predictions, alpha=0.3, s=10, color="steelblue")
 
-    # Línea de predicción perfecta
+    # Perfect-prediction line
     lims = [
         min(targets.min(), predictions.min()),
         max(targets.max(), predictions.max()),
@@ -86,12 +86,12 @@ def plot_error_distribution(
     targets: np.ndarray,
     save_path: str | Path | None = None,
 ) -> None:
-    """Histograma de la distribución de errores (predicción - real).
+    """Histogram of the error distribution (prediction - actual).
 
     Args:
-        predictions: Predicciones del modelo.
-        targets: Valores reales.
-        save_path: Ruta donde guardar la figura (opcional).
+        predictions: Model predictions.
+        targets: Ground-truth values.
+        save_path: Path where the figure is saved (optional).
     """
     errors = predictions - targets
 

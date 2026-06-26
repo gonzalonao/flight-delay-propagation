@@ -1,6 +1,6 @@
-"""Configuración del sistema de logging del proyecto.
+"""Configuration of the project's logging system.
 
-Configura un logger con formato consistente para usar en todos los módulos.
+Configures a logger with a consistent format for use across all modules.
 """
 
 import logging
@@ -11,18 +11,18 @@ def setup_logger(
     name: str = "flight_delay",
     level: int = logging.INFO,
 ) -> logging.Logger:
-    """Crea y configura un logger con salida a consola.
+    """Create and configure a logger with console output.
 
     Args:
-        name: Nombre del logger.
-        level: Nivel de logging (DEBUG, INFO, WARNING, ERROR).
+        name: Logger name.
+        level: Logging level (DEBUG, INFO, WARNING, ERROR).
 
     Returns:
-        Logger configurado.
+        Configured logger.
     """
     logger = logging.getLogger(name)
 
-    # Evitar duplicar handlers si se llama múltiples veces
+    # Avoid duplicating handlers if called multiple times
     if logger.handlers:
         return logger
 

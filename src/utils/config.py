@@ -1,8 +1,8 @@
-"""Carga y gestión de configuración YAML para el proyecto.
+"""YAML configuration loading and management for the project.
 
-Soporta un archivo de configuración base (default.yaml) con sobreescritura
-opcional desde un archivo local (local.yaml) para rutas específicas de cada
-máquina. El archivo local.yaml está en .gitignore.
+Supports a base configuration file (default.yaml) with optional overrides
+from a local file (local.yaml) for machine-specific paths. The local.yaml
+file is gitignored.
 """
 
 import os
@@ -16,10 +16,10 @@ _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
 
 def _expand_env_vars(value: Any) -> Any:
-    """Sustituye ``${VAR}`` por ``os.environ[VAR]`` en strings (recursivo).
+    """Replace ``${VAR}`` with ``os.environ[VAR]`` in strings (recursive).
 
-    Si la variable no está definida, deja el placeholder intacto (permite
-    detectar errores en runs locales sin romper los configs).
+    If the variable is not defined, leaves the placeholder intact (lets you
+    catch errors in local runs without breaking the configs).
     """
     if isinstance(value, str):
         return _ENV_VAR_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
@@ -31,14 +31,14 @@ def _expand_env_vars(value: Any) -> Any:
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Fusiona recursivamente dos diccionarios, priorizando override.
+    """Recursively merge two dictionaries, prioritizing override.
 
     Args:
-        base: Diccionario base.
-        override: Diccionario cuyos valores sobreescriben los de base.
+        base: Base dictionary.
+        override: Dictionary whose values override those of base.
 
     Returns:
-        Diccionario fusionado.
+        Merged dictionary.
     """
     result = base.copy()
     for key, value in override.items():
@@ -50,37 +50,36 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_config(config_path: str | Path) -> dict[str, Any]:
-    """Carga configuración YAML, fusionando default.yaml + per-model + local.yaml.
+    """Load YAML config, merging default.yaml + per-model + local.yaml.
 
-    Orden de precedencia (de menor a mayor):
-        1. ``configs/default.yaml`` — defaults compartidos por todos los modelos
-           (e.g., ``graph.cache_dir``, ``data.raw_dir``, etc.). Se carga
-           automáticamente si existe en el mismo directorio que ``config_path``
-           y NO es el propio archivo solicitado.
-        2. ``config_path`` — el config específico pasado por --config.
-        3. ``local.yaml`` — overrides por máquina (rutas locales). Está en
-           ``.gitignore``.
+    Precedence order (lowest to highest):
+        1. ``configs/default.yaml`` — defaults shared by all models
+           (e.g., ``graph.cache_dir``, ``data.raw_dir``, etc.). Loaded
+           automatically if it exists in the same directory as
+           ``config_path`` and is NOT the requested file itself.
+        2. ``config_path`` — the specific config passed via --config.
+        3. ``local.yaml`` — per-machine overrides (local paths). Gitignored.
 
-    Esto evita el bug histórico en el que claves declaradas sólo en
-    ``default.yaml`` (por ejemplo ``graph.cache_dir``) se perdían cuando se
-    cargaba un config por modelo, deshabilitando silenciosamente el caché
-    de snapshots y obligando a regenerarlos en cada ejecución.
+    This avoids the historical bug where keys declared only in
+    ``default.yaml`` (for example ``graph.cache_dir``) were lost when a
+    per-model config was loaded, silently disabling the snapshot cache and
+    forcing it to be regenerated on every run.
 
     Args:
-        config_path: Ruta al archivo YAML de configuración específico.
+        config_path: Path to the specific YAML config file.
 
     Returns:
-        Diccionario con los parámetros de configuración fusionados.
+        Dictionary with the merged configuration parameters.
 
     Raises:
-        FileNotFoundError: Si el archivo solicitado no existe.
-        yaml.YAMLError: Si el archivo tiene formato YAML inválido.
+        FileNotFoundError: If the requested file does not exist.
+        yaml.YAMLError: If the file has invalid YAML format.
     """
     config_path = Path(config_path)
     if not config_path.exists():
-        raise FileNotFoundError(f"Archivo de configuración no encontrado: {config_path}")
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-    # Capa 1: defaults globales del proyecto (si existen y no son el propio archivo).
+    # Layer 1: project-wide defaults (if they exist and are not the file itself).
     config: dict[str, Any] = {}
     default_path = config_path.parent / "default.yaml"
     if default_path.exists() and default_path.resolve() != config_path.resolve():
@@ -88,12 +87,12 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
             default_config = yaml.safe_load(f) or {}
         config = _deep_merge(config, default_config)
 
-    # Capa 2: config específico solicitado.
+    # Layer 2: the requested specific config.
     with open(config_path, "r", encoding="utf-8") as f:
         specific_config = yaml.safe_load(f) or {}
     config = _deep_merge(config, specific_config)
 
-    # Capa 3: overrides locales por máquina.
+    # Layer 3: per-machine local overrides.
     local_path = config_path.parent / "local.yaml"
     if local_path.exists():
         with open(local_path, "r", encoding="utf-8") as f:
@@ -101,25 +100,25 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
         if local_config:
             config = _deep_merge(config, local_config)
 
-    # Capa 4: expansión de ${VAR} en strings (paths de AzureML, etc.).
+    # Layer 4: expansion of ${VAR} in strings (AzureML paths, etc.).
     config = _expand_env_vars(config)
 
     return config
 
 
 def get_nested(config: dict[str, Any], key: str, default: Any = None) -> Any:
-    """Accede a un valor anidado usando notación con puntos.
+    """Access a nested value using dotted notation.
 
-    Ejemplo:
+    Example:
         get_nested(config, "model.dense_nn.hidden_dims") -> [256, 128, 64]
 
     Args:
-        config: Diccionario de configuración.
-        key: Clave con notación de puntos (e.g., "model.dense_nn.dropout").
-        default: Valor por defecto si la clave no existe.
+        config: Configuration dictionary.
+        key: Dotted-notation key (e.g., "model.dense_nn.dropout").
+        default: Default value if the key does not exist.
 
     Returns:
-        El valor correspondiente a la clave, o el valor por defecto.
+        The value corresponding to the key, or the default value.
     """
     keys = key.split(".")
     value = config

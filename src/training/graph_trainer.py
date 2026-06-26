@@ -1,17 +1,17 @@
-"""Entrenadores para modelos GNN basados en PyTorch Geometric.
+"""Trainers for GNN models based on PyTorch Geometric.
 
-Adaptan :class:`BaseTrainer` para trabajar con grafos PyG (Data objects),
-manejando ``edge_index``, ``edge_attr`` y máscaras de nodos activos.
+Adapt :class:`BaseTrainer` to work with PyG graphs (Data objects),
+handling ``edge_index``, ``edge_attr`` and active-node masks.
 
-Incluye:
+Includes:
 
-- :class:`GraphTrainer`: para modelos que procesan grafos individuales
+- :class:`GraphTrainer`: for models that process individual graphs
   (BasicGCN, MultiHorizonGAT).
-- :class:`SequenceGraphTrainer`: para modelos que procesan secuencias de
-  grafos temporales (SpatioTemporalGNN, Seq2SeqGNN).
+- :class:`SequenceGraphTrainer`: for models that process sequences of
+  temporal graphs (SpatioTemporalGNN, Seq2SeqGNN).
 
-Tras el colapso W4.3 ambos comparten ``BaseTrainer`` y solo aportan
-la lógica específica de su tipo de batch (un grafo vs una secuencia).
+After the W4.3 collapse both share ``BaseTrainer`` and only contribute the
+logic specific to their batch type (a single graph vs a sequence).
 """
 
 import torch
@@ -28,14 +28,14 @@ logger = setup_logger(__name__)
 def _align_for_val_channel0(
     predictions: torch.Tensor, targets: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Alinea pred/target al canal de ArrDelay para validación.
+    """Align pred/target to the ArrDelay channel for validation.
 
-    El val_criterion estándar (MSE) compara minutos de ArrDelay para que
-    el ``val_loss`` sea comparable entre modelos single-task y multi-task
-    (W2). Cuando el modelo o el target llegan en formato multi-canal
-    ``[..., 3]`` extraemos el canal 0 (ArrDelay). El otro canal de
-    regresión (DepDelay) y el canal BCE se evalúan vía métricas
-    dedicadas (``compute_classification_metrics_bce`` etc.), no aquí.
+    The standard val_criterion (MSE) compares ArrDelay minutes so that the
+    ``val_loss`` is comparable across single-task and multi-task models
+    (W2). When the model or target arrives in multi-channel format
+    ``[..., 3]`` we extract channel 0 (ArrDelay). The other regression
+    channel (DepDelay) and the BCE channel are evaluated via dedicated
+    metrics (``compute_classification_metrics_bce`` etc.), not here.
     """
     if predictions.dim() == 3:
         predictions = predictions[..., TARGET_CHANNEL_ARR_DELAY]
@@ -44,24 +44,24 @@ def _align_for_val_channel0(
     return predictions, targets
 
 
-# Alias retro-compatible: hay tests u utilidades externas que pueden estar
-# importando ``_align_for_val`` con su nombre original.
+# Backward-compatible alias: there may be tests or external utilities still
+# importing ``_align_for_val`` under its original name.
 _align_for_val = _align_for_val_channel0
 
 
 class GraphTrainer(BaseTrainer):
-    """Entrenador para modelos GNN sobre grafos temporales individuales.
+    """Trainer for GNN models over individual temporal graphs.
 
     Args:
-        model: Modelo GNN de PyTorch.
-        optimizer: Optimizador.
-        criterion: Función de pérdida para entrenamiento (puede ser ponderada).
-        device: Dispositivo (cpu/cuda).
-        scheduler: Learning rate scheduler (opcional).
-        gradient_clip: Valor máximo de gradiente (0 = sin clip).
-        val_criterion: Función de pérdida para validación. Si ``None``, se
-            usa ``MSELoss`` estándar para que ``val_loss`` sea comparable
-            entre runs single-task y multi-task.
+        model: PyTorch GNN model.
+        optimizer: Optimizer.
+        criterion: Loss function for training (may be weighted).
+        device: Device (cpu/cuda).
+        scheduler: Learning rate scheduler (optional).
+        gradient_clip: Maximum gradient value (0 = no clip).
+        val_criterion: Loss function for validation. If ``None``, standard
+            ``MSELoss`` is used so that ``val_loss`` is comparable across
+            single-task and multi-task runs.
     """
 
     def __init__(
@@ -87,12 +87,12 @@ class GraphTrainer(BaseTrainer):
     def _forward_batch(
         self, batch: Data,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Mueve un grafo al dispositivo y ejecuta el forward.
+        """Move a graph to the device and run the forward pass.
 
-        Para modelos single-horizon que emiten ``[N, 1]`` aplica
-        ``squeeze(-1)`` para mantener la compatibilidad con el resto del
-        pipeline. Multi-horizon ``[N, H]`` y multi-task ``[N, H, 3]``
-        pasan tal cual.
+        For single-horizon models that emit ``[N, 1]`` it applies
+        ``squeeze(-1)`` to keep compatibility with the rest of the
+        pipeline. Multi-horizon ``[N, H]`` and multi-task ``[N, H, 3]``
+        pass through as-is.
         """
         graph = batch
         x = graph.x.to(self.device)
@@ -114,7 +114,7 @@ class GraphTrainer(BaseTrainer):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _align_for_val_channel0(predictions, targets)
 
-    # Wrappers para preservar la API pública (train_graphs/val_graphs).
+    # Wrappers to preserve the public API (train_graphs/val_graphs).
 
     def fit(  # type: ignore[override]
         self,
@@ -142,21 +142,21 @@ class GraphTrainer(BaseTrainer):
 
 
 class SequenceGraphTrainer(BaseTrainer):
-    """Entrenador para modelos que procesan secuencias de grafos temporales.
+    """Trainer for models that process sequences of temporal graphs.
 
-    Diseñado para SpatioTemporalGNN, Seq2SeqGNN y similares, donde cada
-    muestra es una secuencia de ``input_window`` grafos consecutivos. El
-    target y la máscara se toman del último grafo de la secuencia.
+    Designed for SpatioTemporalGNN, Seq2SeqGNN and similar, where each
+    sample is a sequence of ``input_window`` consecutive graphs. The target
+    and mask are taken from the last graph in the sequence.
 
     Args:
-        model: Modelo que acepta ``list[Data]`` en su ``forward()``.
-        optimizer: Optimizador.
-        criterion: Función de pérdida para entrenamiento.
-        device: Dispositivo (cpu/cuda).
-        scheduler: Learning rate scheduler (opcional).
-        gradient_clip: Valor máximo de gradiente (0 = sin clip).
-        val_criterion: Función de pérdida para validación. Si ``None``, se
-            usa ``MSELoss`` estándar para métricas comparables.
+        model: Model that accepts ``list[Data]`` in its ``forward()``.
+        optimizer: Optimizer.
+        criterion: Loss function for training.
+        device: Device (cpu/cuda).
+        scheduler: Learning rate scheduler (optional).
+        gradient_clip: Maximum gradient value (0 = no clip).
+        val_criterion: Loss function for validation. If ``None``, standard
+            ``MSELoss`` is used for comparable metrics.
     """
 
     def __init__(
@@ -180,7 +180,7 @@ class SequenceGraphTrainer(BaseTrainer):
         )
 
     def _move_graph_to_device(self, graph: Data) -> Data:
-        """Clona un grafo y mueve todos sus tensores al dispositivo."""
+        """Clone a graph and move all its tensors to the device."""
         graph = graph.clone()
         graph.x = graph.x.to(self.device)
         graph.edge_index = graph.edge_index.to(self.device)
@@ -195,7 +195,7 @@ class SequenceGraphTrainer(BaseTrainer):
     def _forward_batch(
         self, batch: list[Data],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Mueve una secuencia al dispositivo y ejecuta el forward."""
+        """Move a sequence to the device and run the forward pass."""
         seq_on_device = [self._move_graph_to_device(g) for g in batch]
         predictions = self.model(seq_on_device)
         last_graph = seq_on_device[-1]
@@ -206,7 +206,7 @@ class SequenceGraphTrainer(BaseTrainer):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _align_for_val_channel0(predictions, targets)
 
-    # Wrappers para preservar la API pública (train_sequences/val_sequences).
+    # Wrappers to preserve the public API (train_sequences/val_sequences).
 
     def fit(  # type: ignore[override]
         self,

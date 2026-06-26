@@ -130,7 +130,7 @@ class SpatialGATEncoder(nn.Module):
         super().__init__()
         if num_layers < 1:
             raise ValueError(
-                f"num_layers debe ser >= 1, recibido {num_layers}"
+                f"num_layers must be >= 1, received {num_layers}"
             )
 
         self.dropout = dropout
@@ -239,13 +239,13 @@ class Seq2SeqGNN(nn.Module):
         super().__init__()
         if hidden_dim % num_heads != 0:
             raise ValueError(
-                f"hidden_dim ({hidden_dim}) debe ser divisible por num_heads "
-                f"({num_heads}) — requerido por MultiheadAttention / "
+                f"hidden_dim ({hidden_dim}) must be divisible by num_heads "
+                f"({num_heads}) — required by MultiheadAttention / "
                 f"TransformerEncoderLayer."
             )
         if output_channels < 1:
             raise ValueError(
-                f"output_channels debe ser >= 1, recibido {output_channels}"
+                f"output_channels must be >= 1, received {output_channels}"
             )
 
         self.hidden_dim = hidden_dim

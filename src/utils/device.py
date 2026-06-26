@@ -1,15 +1,15 @@
-"""Selección de dispositivo (CPU/CUDA) con diagnóstico verboso.
+"""Device selection (CPU/CUDA) with verbose diagnostics.
 
-Centraliza la lógica que cada script repetía (``torch.device("cuda" if
-torch.cuda.is_available() else "cpu")``) y añade:
+Centralizes the logic each script used to repeat (``torch.device("cuda" if
+torch.cuda.is_available() else "cpu")``) and adds:
 
-- Soporte para forzar dispositivo desde config (``training.device``).
-- Mensajes de log accionables cuando se solicita CUDA pero no está
-  disponible, con pistas concretas (instalar wheels cu128 para Blackwell,
-  reinstalar si la build es CPU-only, etc.).
-- Detección de la generación de la GPU para advertir cuando una RTX
-  Blackwell (sm_120) está corriendo con wheels antiguos que la marcan
-  como disponible pero no tienen kernels para ella.
+- Support for forcing the device from config (``training.device``).
+- Actionable log messages when CUDA is requested but unavailable, with
+  concrete hints (install cu128 wheels for Blackwell, reinstall if the
+  build is CPU-only, etc.).
+- Detection of the GPU generation to warn when an RTX Blackwell (sm_120)
+  is running with stale wheels that mark it as available but have no
+  kernels for it.
 """
 
 from __future__ import annotations
@@ -22,27 +22,27 @@ logger = setup_logger(__name__)
 
 
 def select_device(config: dict | None = None) -> torch.device:
-    """Devuelve el ``torch.device`` a usar y loguea diagnóstico detallado.
+    """Return the ``torch.device`` to use and log detailed diagnostics.
 
-    Resolución del dispositivo:
+    Device resolution:
 
-    1. Si ``config['training']['device']`` está definido como ``"cuda"`` o
-       ``"cpu"``, se usa esa elección. ``"cuda"`` solicitado pero no
-       disponible lanza ``RuntimeError`` con instrucciones de instalación,
-       en lugar de caer silenciosamente a CPU (que es lo que estaba
-       enmascarando los entrenamientos lentos en máquina del usuario).
-    2. ``"auto"`` o ausente → ``cuda`` si está disponible, si no ``cpu``,
-       con un warning explicando por qué se eligió CPU.
+    1. If ``config['training']['device']`` is set to ``"cuda"`` or
+       ``"cpu"``, that choice is used. ``"cuda"`` requested but not
+       available raises ``RuntimeError`` with installation instructions,
+       instead of silently falling back to CPU (which is what was masking
+       slow training runs on the user's machine).
+    2. ``"auto"`` or absent → ``cuda`` if available, otherwise ``cpu``,
+       with a warning explaining why CPU was chosen.
 
     Args:
-        config: Diccionario de configuración (puede ser ``None``).
+        config: Configuration dictionary (may be ``None``).
 
     Returns:
-        ``torch.device`` listo para pasar a modelos y tensores.
+        ``torch.device`` ready to pass to models and tensors.
 
     Raises:
-        RuntimeError: Si ``device='cuda'`` se solicitó explícitamente pero
-            ``torch.cuda.is_available()`` es ``False``.
+        RuntimeError: If ``device='cuda'`` was explicitly requested but
+            ``torch.cuda.is_available()`` is ``False``.
     """
     requested = "auto"
     if config is not None:
@@ -51,54 +51,54 @@ def select_device(config: dict | None = None) -> torch.device:
 
     cuda_available = torch.cuda.is_available()
     torch_version = torch.__version__
-    cuda_build = torch.version.cuda  # None si torch es CPU-only
+    cuda_build = torch.version.cuda  # None if torch is CPU-only
 
     if requested == "cpu":
-        logger.info("Dispositivo: cpu (forzado vía training.device='cpu')")
+        logger.info("Device: cpu (forced via training.device='cpu')")
         return torch.device("cpu")
 
     if requested == "cuda":
         if not cuda_available:
             raise RuntimeError(
-                "training.device='cuda' pero torch.cuda.is_available() es "
+                "training.device='cuda' but torch.cuda.is_available() is "
                 f"False.\n"
                 f"  torch version: {torch_version}\n"
                 f"  CUDA build:    {cuda_build}\n"
-                "  Causas típicas:\n"
-                "    1. PyTorch instalado como CPU-only (cuda_build=None). "
-                "Reinstala desde https://pytorch.org/get-started/locally/\n"
-                "    2. RTX 5070 / Blackwell (sm_120) con wheels cu121 o "
-                "anteriores. Necesitas cu128: ver GPU_SETUP.md\n"
-                "    3. Driver NVIDIA desactualizado o no instalado.\n"
-                "  Pasa training.device='auto' (o quita la clave) para "
-                "permitir fallback a CPU."
+                "  Typical causes:\n"
+                "    1. PyTorch installed as CPU-only (cuda_build=None). "
+                "Reinstall from https://pytorch.org/get-started/locally/\n"
+                "    2. RTX 5070 / Blackwell (sm_120) with cu121 or older "
+                "wheels. You need cu128: see docs/gpu-setup.md\n"
+                "    3. Outdated or missing NVIDIA driver.\n"
+                "  Pass training.device='auto' (or remove the key) to "
+                "allow fallback to CPU."
             )
         device = torch.device("cuda")
         _log_cuda_info(device)
         return device
 
-    # requested == "auto" (o cualquier otro valor)
+    # requested == "auto" (or any other value)
     if cuda_available:
         device = torch.device("cuda")
         _log_cuda_info(device)
         return device
 
     logger.warning(
-        "Dispositivo: cpu (CUDA no disponible).\n"
+        "Device: cpu (CUDA unavailable).\n"
         "  torch version: %s | CUDA build: %s\n"
-        "  Si tienes una GPU NVIDIA y esto te sorprende:\n"
-        "    - cuda_build=None significa que el wheel instalado es CPU-only.\n"
-        "    - Si tienes RTX 5070 (Blackwell), necesitas wheels cu128. "
-        "Ver GPU_SETUP.md.\n"
-        "    - Para fallar duro en lugar de caer a CPU, añade "
-        "training.device: cuda al YAML.",
+        "  If you have an NVIDIA GPU and this surprises you:\n"
+        "    - cuda_build=None means the installed wheel is CPU-only.\n"
+        "    - If you have an RTX 5070 (Blackwell), you need cu128 wheels. "
+        "See docs/gpu-setup.md.\n"
+        "    - To fail hard instead of falling back to CPU, add "
+        "training.device: cuda to the YAML.",
         torch_version, cuda_build,
     )
     return torch.device("cpu")
 
 
 def _log_cuda_info(device: torch.device) -> None:
-    """Loguea info de la GPU y advierte si la generación parece incompatible."""
+    """Log GPU info and warn if the generation seems incompatible."""
     idx = device.index if device.index is not None else 0
     name = torch.cuda.get_device_name(idx)
     cap_major, cap_minor = torch.cuda.get_device_capability(idx)
@@ -106,12 +106,13 @@ def _log_cuda_info(device: torch.device) -> None:
     cuda_build = torch.version.cuda
 
     logger.info(
-        "Dispositivo: cuda:%d (%s, sm_%d%d, %.1f GB, torch CUDA build=%s)",
+        "Device: cuda:%d (%s, sm_%d%d, %.1f GB, torch CUDA build=%s)",
         idx, name, cap_major, cap_minor, total_mem_gb, cuda_build,
     )
 
-    # Aviso específico: Blackwell (sm_120+) con CUDA build < 12.8 suele dar
-    # "is_available()=True" pero fallar con kernels al primer .cuda() real.
+    # Specific warning: Blackwell (sm_120+) with CUDA build < 12.8 usually
+    # reports "is_available()=True" but fails on kernels at the first real
+    # .cuda() call.
     if cap_major >= 12:
         try:
             major, minor = (int(p) for p in (cuda_build or "0.0").split(".")[:2])
@@ -119,8 +120,8 @@ def _log_cuda_info(device: torch.device) -> None:
             major, minor = 0, 0
         if (major, minor) < (12, 8):
             logger.warning(
-                "GPU Blackwell (sm_%d%d) detectada con torch CUDA build %s. "
-                "Es probable que las operaciones fallen en runtime: instala "
-                "wheels cu128 (ver GPU_SETUP.md).",
+                "Blackwell GPU (sm_%d%d) detected with torch CUDA build %s. "
+                "Operations will likely fail at runtime: install cu128 "
+                "wheels (see docs/gpu-setup.md).",
                 cap_major, cap_minor, cuda_build,
             )

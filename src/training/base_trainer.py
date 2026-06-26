@@ -1,27 +1,27 @@
-"""Base de entrenamiento compartida por todos los trainers del proyecto.
+"""Training base shared by all of the project's trainers.
 
-Concentra el ciclo train/val/epochs/scheduler/early-stopping/checkpoint
-que antes se repetía en :class:`Trainer`, :class:`GraphTrainer` y
-:class:`SequenceGraphTrainer`. Las subclases solo necesitan implementar
-``_forward_batch`` y, opcionalmente, ``_align_for_val``.
+Concentrates the train/val/epochs/scheduler/early-stopping/checkpoint
+cycle that used to be repeated across :class:`Trainer`,
+:class:`GraphTrainer` and :class:`SequenceGraphTrainer`. Subclasses only
+need to implement ``_forward_batch`` and, optionally, ``_align_for_val``.
 
-Diseño (W4.3):
+Design (W4.3):
 
-- ``_forward_batch(batch)`` devuelve ``(predictions, targets, mask | None)``.
-  La máscara es ``None`` para datos tabulares y un tensor booleano sobre
-  los nodos activos para datos de grafos.
-- ``_align_for_val(pred, target)`` es un hook que las subclases sobreescriben
-  para que el ``val_loss`` sea comparable entre runs single-task y
-  multi-task (ver W2): por defecto es identidad.
-- ``fit(train_data, val_data, ...)`` orquesta el ciclo completo y delega
-  cada paso en ``train_epoch`` / ``validate``.
+- ``_forward_batch(batch)`` returns ``(predictions, targets, mask | None)``.
+  The mask is ``None`` for tabular data and a boolean tensor over the
+  active nodes for graph data.
+- ``_align_for_val(pred, target)`` is a hook subclasses override so that
+  ``val_loss`` is comparable across single-task and multi-task runs (see
+  W2): by default it is the identity.
+- ``fit(train_data, val_data, ...)`` orchestrates the full cycle and
+  delegates each step to ``train_epoch`` / ``validate``.
 
-Subclases:
+Subclasses:
 
-- :class:`src.training.trainer.Trainer` para datos tabulares (DataLoader).
-- :class:`src.training.graph_trainer.GraphTrainer` para snapshots de grafos.
-- :class:`src.training.graph_trainer.SequenceGraphTrainer` para secuencias
-  de grafos temporales.
+- :class:`src.training.trainer.Trainer` for tabular data (DataLoader).
+- :class:`src.training.graph_trainer.GraphTrainer` for graph snapshots.
+- :class:`src.training.graph_trainer.SequenceGraphTrainer` for sequences
+  of temporal graphs.
 """
 
 from typing import Any, Iterable
@@ -36,19 +36,19 @@ logger = setup_logger(__name__)
 
 
 class BaseTrainer:
-    """Plantilla común para todos los entrenadores del proyecto.
+    """Common template for all of the project's trainers.
 
     Args:
-        model: Modelo de PyTorch.
-        optimizer: Optimizador.
-        criterion: Función de pérdida para entrenamiento.
-        device: Dispositivo (cpu/cuda).
-        scheduler: Learning rate scheduler (opcional).
-        gradient_clip: Valor máximo de gradiente (0 = sin clip).
-        val_criterion: Función de pérdida para validación. Si ``None``,
-            se usa ``criterion`` (comportamiento tabular histórico). Las
-            subclases de grafos pasan ``MSELoss()`` para que el val_loss
-            sea comparable entre runs.
+        model: PyTorch model.
+        optimizer: Optimizer.
+        criterion: Loss function for training.
+        device: Device (cpu/cuda).
+        scheduler: Learning rate scheduler (optional).
+        gradient_clip: Maximum gradient value (0 = no clip).
+        val_criterion: Loss function for validation. If ``None``,
+            ``criterion`` is used (historical tabular behavior). Graph
+            subclasses pass ``MSELoss()`` so that val_loss is comparable
+            across runs.
     """
 
     def __init__(
@@ -70,37 +70,37 @@ class BaseTrainer:
         self.gradient_clip = gradient_clip
 
     # ------------------------------------------------------------------
-    # Hooks que las subclases sobreescriben
+    # Hooks that subclasses override
     # ------------------------------------------------------------------
 
     def _forward_batch(
         self, batch: Any,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-        """Procesa un batch y devuelve ``(pred, target, mask | None)``.
+        """Process a batch and return ``(pred, target, mask | None)``.
 
-        Las subclases deben implementar este método para gestionar el
-        movimiento al dispositivo, la llamada al ``forward`` del modelo y
-        cualquier normalización de shapes (por ejemplo ``squeeze(-1)``).
+        Subclasses must implement this method to handle moving to the
+        device, calling the model's ``forward`` and any shape
+        normalization (for example ``squeeze(-1)``).
 
-        Si la subclase trabaja con grafos parcialmente activos, debe
-        devolver una máscara booleana ``[N]``; el bucle común se encarga
-        de aplicarla. Para datos tabulares, devolver ``None``.
+        If the subclass works with partially active graphs, it must return
+        a boolean mask ``[N]``; the shared loop applies it. For tabular
+        data, return ``None``.
         """
         raise NotImplementedError
 
     def _align_for_val(
         self, predictions: torch.Tensor, targets: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Hook para alinear pred/target antes del ``val_criterion``.
+        """Hook to align pred/target before the ``val_criterion``.
 
-        Por defecto, identidad. Las subclases de grafos lo sobreescriben
-        para extraer el canal de ArrDelay cuando el modelo emite salidas
-        multi-tarea (ver W2 / ``TARGET_CHANNEL_ARR_DELAY``).
+        Identity by default. Graph subclasses override it to extract the
+        ArrDelay channel when the model emits multi-task outputs (see
+        W2 / ``TARGET_CHANNEL_ARR_DELAY``).
         """
         return predictions, targets
 
     # ------------------------------------------------------------------
-    # Lógica común
+    # Shared logic
     # ------------------------------------------------------------------
 
     def _apply_mask(
@@ -109,11 +109,11 @@ class BaseTrainer:
         targets: torch.Tensor,
         mask: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
-        """Aplica la máscara de nodos activos si existe.
+        """Apply the active-node mask if present.
 
         Returns:
-            ``(pred, target)`` enmascarados, o ``None`` si la máscara está
-            presente pero vacía (no hay nodos activos en este batch).
+            Masked ``(pred, target)``, or ``None`` if the mask is present
+            but empty (no active nodes in this batch).
         """
         if mask is None:
             return predictions, targets
@@ -122,14 +122,14 @@ class BaseTrainer:
         return predictions[mask], targets[mask]
 
     def train_epoch(self, dataset: Iterable[Any]) -> float:
-        """Ejecuta una época de entrenamiento.
+        """Run one training epoch.
 
         Args:
-            dataset: Iterable de batches (DataLoader, lista de grafos o
-                lista de secuencias, según la subclase).
+            dataset: Iterable of batches (DataLoader, list of graphs or
+                list of sequences, depending on the subclass).
 
         Returns:
-            Pérdida promedio de la época.
+            Average loss of the epoch.
         """
         self.model.train()
         total_loss = 0.0
@@ -160,10 +160,10 @@ class BaseTrainer:
 
     @torch.no_grad()
     def validate(self, dataset: Iterable[Any]) -> float:
-        """Ejecuta validación sin gradientes.
+        """Run validation without gradients.
 
         Returns:
-            Pérdida promedio según ``val_criterion``.
+            Average loss according to ``val_criterion``.
         """
         self.model.eval()
         total_loss = 0.0
@@ -192,20 +192,19 @@ class BaseTrainer:
         checkpoint_path: str | None = None,
         model_name: str | None = None,
     ) -> dict[str, list[float]]:
-        """Ciclo completo de entrenamiento con early stopping y checkpoint.
+        """Full training cycle with early stopping and checkpointing.
 
         Args:
-            train_data: Iterable de batches de entrenamiento.
-            val_data: Iterable de batches de validación.
-            epochs: Número máximo de épocas.
-            patience: Épocas sin mejora antes de parar.
-            checkpoint_path: Ruta para guardar el mejor modelo (opcional).
-            model_name: Nombre lógico del modelo, persistido en el
-                checkpoint para que ``load_checkpoint`` pueda validar la
-                arquitectura.
+            train_data: Iterable of training batches.
+            val_data: Iterable of validation batches.
+            epochs: Maximum number of epochs.
+            patience: Epochs without improvement before stopping.
+            checkpoint_path: Path to save the best model (optional).
+            model_name: Logical model name, persisted in the checkpoint so
+                that ``load_checkpoint`` can validate the architecture.
 
         Returns:
-            Diccionario con historial ``{'train_loss', 'val_loss'}``.
+            Dictionary with history ``{'train_loss', 'val_loss'}``.
         """
         early_stopping = EarlyStopping(patience=patience)
         checkpoint = (
@@ -231,7 +230,7 @@ class BaseTrainer:
             history["val_loss"].append(val_loss)
 
             logger.info(
-                "Época %d/%d | Train Loss: %.4f | Val Loss: %.4f | LR: %.2e",
+                "Epoch %d/%d | Train Loss: %.4f | Val Loss: %.4f | LR: %.2e",
                 epoch, epochs, train_loss, val_loss,
                 self.optimizer.param_groups[0]["lr"],
             )
@@ -240,7 +239,7 @@ class BaseTrainer:
                 checkpoint.step(val_loss, self.model, self.optimizer, epoch)
 
             if early_stopping.step(val_loss):
-                logger.info("Early stopping en época %d", epoch)
+                logger.info("Early stopping at epoch %d", epoch)
                 break
 
         return history

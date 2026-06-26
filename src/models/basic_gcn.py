@@ -1,9 +1,8 @@
-"""Red de convolución sobre grafos (GCN) para predicción de retrasos.
+"""Graph convolutional network (GCN) for delay prediction.
 
-Primer modelo GNN del proyecto. Opera sobre grafos de aeropuertos donde
-los nodos representan aeropuertos y las aristas representan rutas aéreas.
-Predice el retraso promedio (en minutos) de cada aeropuerto en la
-siguiente ventana temporal.
+The project's first GNN model. Operates on airport graphs where nodes
+represent airports and edges represent air routes. Predicts the average
+delay (in minutes) of each airport over the next time window.
 """
 
 import torch
@@ -13,18 +12,18 @@ from torch_geometric.nn import GCNConv, global_mean_pool
 
 
 class BasicGCN(nn.Module):
-    """GCN para predicción de retrasos por aeropuerto (regresión).
+    """GCN for per-airport delay prediction (regression).
 
-    Arquitectura: N capas GCNConv con BatchNorm, ReLU y dropout,
-    seguidas de una capa lineal de salida. Cada capa propaga
-    información de los aeropuertos vecinos para capturar la
-    propagación espacial de retrasos.
+    Architecture: N GCNConv layers with BatchNorm, ReLU and dropout,
+    followed by a linear output layer. Each layer propagates information
+    from neighboring airports to capture the spatial propagation of
+    delays.
 
     Args:
-        input_dim: Número de features por nodo.
-        hidden_channels: Dimensión de las capas ocultas GCN.
-        num_layers: Número de capas GCNConv.
-        dropout: Probabilidad de dropout.
+        input_dim: Number of features per node.
+        hidden_channels: Dimension of the hidden GCN layers.
+        num_layers: Number of GCNConv layers.
+        dropout: Dropout probability.
     """
 
     def __init__(
@@ -38,20 +37,20 @@ class BasicGCN(nn.Module):
 
         self.dropout = dropout
 
-        # Capas GCN
+        # GCN layers
         self.convs = nn.ModuleList()
         self.bns = nn.ModuleList()
 
-        # Primera capa: input_dim -> hidden_channels
+        # First layer: input_dim -> hidden_channels
         self.convs.append(GCNConv(input_dim, hidden_channels))
         self.bns.append(nn.BatchNorm1d(hidden_channels))
 
-        # Capas intermedias: hidden_channels -> hidden_channels
+        # Intermediate layers: hidden_channels -> hidden_channels
         for _ in range(num_layers - 1):
             self.convs.append(GCNConv(hidden_channels, hidden_channels))
             self.bns.append(nn.BatchNorm1d(hidden_channels))
 
-        # Capa de salida: regresión (retraso en minutos) por nodo
+        # Output layer: per-node regression (delay in minutes)
         self.classifier = nn.Linear(hidden_channels, 1)
 
     def forward(
@@ -60,18 +59,18 @@ class BasicGCN(nn.Module):
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Forward pass sobre el grafo.
+        """Forward pass over the graph.
 
         Args:
             x: Node features [num_nodes, input_dim].
-            edge_index: Índices de aristas [2, num_edges].
-            edge_attr: Tensor de aristas. Puede ser ``[E]`` (peso
-                escalar legado) o ``[E, k]`` (multi-feature). GCNConv
-                solo admite escalar, así que extraemos la primera
-                columna (``flight_count_norm``) cuando es 2D.
+            edge_index: Edge indices [2, num_edges].
+            edge_attr: Edge tensor. May be ``[E]`` (legacy scalar weight)
+                or ``[E, k]`` (multi-feature). GCNConv only accepts a
+                scalar, so we extract the first column
+                (``flight_count_norm``) when it is 2D.
 
         Returns:
-            Logits por nodo [num_nodes, 1].
+            Per-node logits [num_nodes, 1].
         """
         edge_weight = None
         if edge_attr is not None:

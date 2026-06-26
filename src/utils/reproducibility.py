@@ -1,7 +1,7 @@
-"""Utilidades para garantizar reproducibilidad de experimentos.
+"""Utilities to guarantee experiment reproducibility.
 
-Fija las semillas aleatorias de todas las librerías relevantes para
-asegurar resultados consistentes entre ejecuciones.
+Sets the random seeds of all relevant libraries to ensure consistent
+results across runs.
 """
 
 import random
@@ -11,10 +11,10 @@ import torch
 
 
 def set_seed(seed: int = 42) -> None:
-    """Fija la semilla aleatoria en Python, NumPy y PyTorch.
+    """Set the random seed in Python, NumPy and PyTorch.
 
     Args:
-        seed: Valor de la semilla aleatoria.
+        seed: Random seed value.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -24,6 +24,6 @@ def set_seed(seed: int = 42) -> None:
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-    # Operaciones deterministas (puede reducir rendimiento)
+    # Deterministic operations (may reduce performance)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False

@@ -1,28 +1,27 @@
-"""Construcción de grafos de aeropuertos para modelos GNN.
+"""Construction of airport graphs for GNN models.
 
-Transforma datos tabulares de vuelos en grafos donde los nodos son
-aeropuertos y las aristas son rutas aéreas. Genera snapshots temporales
-con features agregadas por aeropuerto y targets continuos de retraso
-(minutos de retraso promedio en la siguiente ventana temporal).
+Transforms tabular flight data into graphs where nodes are airports and
+edges are air routes. Generates temporal snapshots with per-airport
+aggregated features and continuous delay targets (average delay in minutes
+over the next time window).
 
-INVARIANTE DE FUGA TEMPORAL (no leakage)
------------------------------------------
-En el snapshot con `current_end = T`, las features y aristas de cada
-nodo solo pueden depender de:
+TEMPORAL LEAKAGE INVARIANT (no leakage)
+----------------------------------------
+In the snapshot with `current_end = T`, the features and edges of each node
+may only depend on:
 
-  * Cualquier vuelo con `arr_timestamp < T` (completado antes de T).
-  * Las columnas de schedule (`CRS*`, `Distance`, `Airline`, `Origin`,
-    `Dest`) de cualquier vuelo — son conocidas a priori y se usan tanto
-    para features históricas como para features exógenas del target.
+  * Any flight with `arr_timestamp < T` (completed before T).
+  * The schedule columns (`CRS*`, `Distance`, `Airline`, `Origin`, `Dest`)
+    of any flight — they are known a priori and used both for historical
+    features and for exogenous features of the target.
 
-NO pueden depender de columnas Class B (post-hoc: `DepTime`, `ArrTime`,
-`WheelsOff/On`, `TaxiOut/In`, `ActualElapsedTime`, `AirTime`,
-`DepDelay`, `ArrDelay`, `DepDel15`, `ArrDel15`, `CarrierDelay`,
-`WeatherDelay`, `NASDelay`, `SecurityDelay`, `LateAircraftDelay`,
-`Cancelled`, `Diverted`) de vuelos cuyo `arr_timestamp >= T`. Las
-features rich precomputadas en `_build_history_lookups` agrupan
-explícitamente por hora de llegada (`arr_timestamp`) para que la
-ventana histórica se cierre estrictamente antes de T.
+They may NOT depend on Class B columns (post-hoc: `DepTime`, `ArrTime`,
+`WheelsOff/On`, `TaxiOut/In`, `ActualElapsedTime`, `AirTime`, `DepDelay`,
+`ArrDelay`, `DepDel15`, `ArrDel15`, `CarrierDelay`, `WeatherDelay`,
+`NASDelay`, `SecurityDelay`, `LateAircraftDelay`, `Cancelled`, `Diverted`)
+of flights whose `arr_timestamp >= T`. The rich features precomputed in
+`_build_history_lookups` group explicitly by arrival hour (`arr_timestamp`)
+so the historical window closes strictly before T.
 """
 
 import datetime as dt
@@ -58,75 +57,74 @@ __all__ = [
 ]
 
 
-# Causas BTS que vienen en el dataset Combined_Flights cuando ArrDelay≥15.
-# Si una columna no está cargada (Parquet antiguo), se omite del feature
-# correspondiente.
+# BTS causes that come in the Combined_Flights dataset when ArrDelay≥15.
+# If a column is not loaded (old Parquet), it is omitted from the
+# corresponding feature.
 BTS_CAUSE_COLUMNS = (
     "CarrierDelay", "WeatherDelay", "NASDelay",
     "SecurityDelay", "LateAircraftDelay",
 )
 
-# Lags (en pasos de `window_delta`) usados como features históricas.
+# Lags (in steps of `window_delta`) used as historical features.
 ARR_DELAY_LAGS = (1, 3, 6, 24)
 ROLLING_WINDOW_HOURS = 6
 
-# Tamaño del bloque H (meteorología) cuando ``weather_lookups`` está
-# activado. Histórico = mean wind + max gust + sum precip + mean cloud
-# + 5 one-hots de categoría dominante; futuro idéntico por horizonte.
-# Mantenerlos iguales hace que la cuenta total sea ``9 + 9 * H``.
+# Size of block H (weather) when ``weather_lookups`` is enabled. Historical
+# = mean wind + max gust + sum precip + mean cloud + 5 one-hots of the
+# dominant category; future identical per horizon. Keeping them equal makes
+# the total count ``9 + 9 * H``.
 WEATHER_BLOCK_HIST_SIZE = 4 + NUM_WEATHER_CATEGORIES   # = 9
 WEATHER_BLOCK_FUTURE_SIZE_PER_H = 4 + NUM_WEATHER_CATEGORIES  # = 9
 
 
 @dataclass
 class HistoryLookups:
-    """Estructuras precomputadas para feature engineering por snapshot.
+    """Precomputed structures for per-snapshot feature engineering.
 
-    Construidas una sola vez al inicio de `create_temporal_graphs`,
-    permiten que cada llamada a `compute_node_features_rich` y
-    `compute_dynamic_edge_attr` sea O(num_airports × num_horizons) o
-    O(num_edges) sin revisitar el DataFrame entero.
+    Built once at the start of `create_temporal_graphs`, they let each call
+    to `compute_node_features_rich` and `compute_dynamic_edge_attr` be
+    O(num_airports × num_horizons) or O(num_edges) without revisiting the
+    entire DataFrame.
 
-    Las series indexadas por nodo usan `(airport, hour_bucket)`; las
-    indexadas por arista usan `(origin, dest, hour_bucket)`. En todos
-    los casos `hour_bucket = pd.Timestamp` alineado al inicio de la
-    ventana.
+    Node-indexed series use `(airport, hour_bucket)`; edge-indexed ones use
+    `(origin, dest, hour_bucket)`. In all cases `hour_bucket = pd.Timestamp`
+    aligned to the start of the window.
     """
 
     arr_delay_by_airport_hour: pd.Series  # mean ArrDelay (Class B)
-    sched_arr_count: pd.Series            # nº vuelos programados a llegar (Class A)
-    sched_dep_count: pd.Series            # nº vuelos programados a salir (Class A)
-    sched_arr_from_top10: pd.Series       # nº de top-10 origins → este aeropuerto
-    sched_arr_mean_distance: pd.Series    # distancia media programada de inbound
-    rolling_mean_arr_delay: pd.Series     # rolling 6h de ArrDelay (Class B)
+    sched_arr_count: pd.Series            # # flights scheduled to arrive (Class A)
+    sched_dep_count: pd.Series            # # flights scheduled to depart (Class A)
+    sched_arr_from_top10: pd.Series       # # of top-10 origins → this airport
+    sched_arr_mean_distance: pd.Series    # mean scheduled inbound distance
+    rolling_mean_arr_delay: pd.Series     # rolling 6h of ArrDelay (Class B)
     rolling_std_arr_delay: pd.Series      # rolling 6h std (Class B)
-    top10_origins: list[str]              # IATAs de los 10 aeropuertos más conectados
-    # Por arista (Origin, Dest, bucket):
-    route_recent_arr_delay: pd.Series     # rolling 6h de ArrDelay por ruta (Class B)
-    route_sched_count: pd.Series          # nº vuelos programados por ruta y dep_bucket (Class A)
+    top10_origins: list[str]              # IATAs of the 10 most connected airports
+    # Per edge (Origin, Dest, bucket):
+    route_recent_arr_delay: pd.Series     # rolling 6h of ArrDelay per route (Class B)
+    route_sched_count: pd.Series          # scheduled flights per route+bucket (Class A)
 
 
 @dataclass
 class WeatherLookups:
-    """Estructura precomputada para acceso O(1) a observaciones horarias.
+    """Precomputed structure for O(1) access to hourly observations.
 
-    ``airport_weather`` mapea IATA → DataFrame indexado por
-    ``timestamp`` (horario, redondeado al inicio de la hora) con columnas:
+    ``airport_weather`` maps IATA → DataFrame indexed by ``timestamp``
+    (hourly, rounded to the start of the hour) with columns:
     ``wind_speed_10m``, ``wind_gusts_10m``, ``precipitation``,
-    ``cloud_cover``, ``weather_category``. Los aeropuertos sin datos
-    (sea por error de red o porque su IATA no figura en el CSV de
-    coordenadas) NO aparecen en el dict — los consumidores devuelven el
-    vector cero al fallar el lookup, lo que el modelo interpreta como
-    "sin señal meteorológica" (equivalente a la rama ``weather_lookups
-    is None`` para ese aeropuerto en concreto).
+    ``cloud_cover``, ``weather_category``. Airports without data (whether
+    from a network error or because their IATA is not in the coordinates
+    CSV) do NOT appear in the dict — consumers return the zero vector when
+    the lookup fails, which the model interprets as "no weather signal"
+    (equivalent to the ``weather_lookups is None`` branch for that specific
+    airport).
 
     Attributes:
-        airport_weather: Dict IATA → DataFrame horario.
-        enabled_params: Conjunto de claves activas {"wind", "precip_cloud",
-            "category"}. Permite encender/apagar grupos individuales sin
-            reconstruir la caché HTTP — los grupos apagados se sobreescriben
-            con 0 en ``compute_node_features_rich``. Esto da soporte directo
-            a los toggles de OPTIMIZATIONS.md.
+        airport_weather: Dict IATA → hourly DataFrame.
+        enabled_params: Set of active keys {"wind", "precip_cloud",
+            "category"}. Lets individual groups be toggled on/off without
+            rebuilding the HTTP cache — disabled groups are overwritten with
+            0 in ``compute_node_features_rich``. This directly supports the
+            toggles in docs/ablation-log.md.
     """
 
     airport_weather: dict[str, pd.DataFrame] = field(default_factory=dict)
@@ -144,18 +142,18 @@ def _weather_window_agg(
     start: pd.Timestamp,
     end: pd.Timestamp,
 ) -> np.ndarray:
-    """Agrega observaciones horarias en ``[start, end)`` para un IATA.
+    """Aggregate hourly observations in ``[start, end)`` for an IATA.
 
-    Devuelve un vector denso de ``WEATHER_BLOCK_HIST_SIZE`` floats:
+    Returns a dense vector of ``WEATHER_BLOCK_HIST_SIZE`` floats:
 
-      [0]      mean(wind_speed_10m) en km/h
-      [1]      max(wind_gusts_10m) en km/h
-      [2]      sum(precipitation) en mm
-      [3]      mean(cloud_cover) en %
-      [4..8]   one-hot de la categoría DOMINANTE (moda) en la ventana
+      [0]      mean(wind_speed_10m) in km/h
+      [1]      max(wind_gusts_10m) in km/h
+      [2]      sum(precipitation) in mm
+      [3]      mean(cloud_cover) in %
+      [4..8]   one-hot of the DOMINANT category (mode) in the window
 
-    Las columnas correspondientes a grupos desactivados (``enabled_params``)
-    se ponen a 0 — toggle a nivel de feature group para ablaciones.
+    Columns corresponding to disabled groups (``enabled_params``) are set to
+    0 — feature-group-level toggle for ablations.
     """
     out = np.zeros(WEATHER_BLOCK_HIST_SIZE, dtype=np.float32)
     df = weather.airport_weather.get(iata)
@@ -190,9 +188,9 @@ def _weather_window_agg(
     if "category" in weather.enabled_params:
         cats = window["weather_category"].to_numpy(dtype="int8")
         if cats.size > 0:
-            # Moda: argmax sobre el histograma. ``np.bincount`` con
-            # ``minlength`` garantiza un slot por categoría aunque la
-            # ventana no contenga todas.
+            # Mode: argmax over the histogram. ``np.bincount`` with
+            # ``minlength`` guarantees a slot per category even if the
+            # window does not contain all of them.
             hist = np.bincount(cats, minlength=NUM_WEATHER_CATEGORIES)
             dominant = int(np.argmax(hist))
             out[4 + dominant] = 1.0
@@ -205,18 +203,18 @@ def _weather_point_obs(
     iata: str,
     timestamp: pd.Timestamp,
 ) -> np.ndarray:
-    """Lookup horario alineado a la hora de ``timestamp``.
+    """Hourly lookup aligned to the hour of ``timestamp``.
 
-    Devuelve un vector denso de ``WEATHER_BLOCK_FUTURE_SIZE_PER_H`` floats
-    con el mismo esquema que :func:`_weather_window_agg` excepto que las
-    columnas 0..3 son la observación puntual (no agregada) y 4..8 es el
-    one-hot de la categoría observada en esa hora exacta.
+    Returns a dense vector of ``WEATHER_BLOCK_FUTURE_SIZE_PER_H`` floats
+    with the same schema as :func:`_weather_window_agg` except that columns
+    0..3 are the point observation (not aggregated) and 4..8 is the one-hot
+    of the category observed at that exact hour.
 
-    Justificación de leakage: el target en T+h es el delay observado,
-    no la meteorología; el feature es exógeno. Usamos la observación en
-    T+h como "perfect-forecast proxy" — sobrestima la utilidad real (un
-    sistema de producción usaría una previsión con error), pero ese gap
-    se aborda en una ablación futura (OPTIMIZATIONS.md).
+    Leakage rationale: the target at T+h is the observed delay, not the
+    weather; the feature is exogenous. We use the observation at T+h as a
+    "perfect-forecast proxy" — it overestimates the real usefulness (a
+    production system would use a forecast with error), but that gap is
+    addressed in a future ablation (docs/ablation-log.md).
     """
     out = np.zeros(WEATHER_BLOCK_FUTURE_SIZE_PER_H, dtype=np.float32)
     df = weather.airport_weather.get(iata)
@@ -228,8 +226,8 @@ def _weather_point_obs(
         return out
     row = df.loc[hour]
     if isinstance(row, pd.DataFrame):
-        # Lookup que coincidió con varios timestamps (no debería pasar con
-        # el floor("h") pero por defensiva nos quedamos con el primero).
+        # A lookup that matched several timestamps (should not happen with
+        # floor("h") but defensively we keep the first).
         row = row.iloc[0]
 
     if "wind" in weather.enabled_params:
@@ -263,17 +261,15 @@ def _build_weather_lookups(
     airports: list[str] | None = None,
     enabled_params: frozenset[str] | None = None,
 ) -> WeatherLookups | None:
-    """Construye ``WeatherLookups`` a partir del DataFrame multi-aeropuerto.
+    """Build ``WeatherLookups`` from the multi-airport DataFrame.
 
-    Si ``weather_df`` es ``None`` o vacío, devuelve ``None`` (lo que
-    desactiva el bloque H aguas abajo, manteniendo el contrato anterior
-    de feature dim).
+    If ``weather_df`` is ``None`` or empty, returns ``None`` (which disables
+    block H downstream, keeping the previous feature-dim contract).
 
-    El DataFrame de entrada tiene MultiIndex ``(iata, timestamp)`` —
-    la salida es un dict ``{iata: df_indexado_por_timestamp}`` con
-    ``timestamp`` redondeado a la hora (``floor("h")``) para que el
-    lookup ``_weather_point_obs`` cierre por hora exacta. Hashable
-    keys habilitan O(1) por airport.
+    The input DataFrame has MultiIndex ``(iata, timestamp)`` — the output is
+    a dict ``{iata: df_indexed_by_timestamp}`` with ``timestamp`` rounded to
+    the hour (``floor("h")``) so the ``_weather_point_obs`` lookup closes on
+    the exact hour. Hashable keys enable O(1) per airport.
     """
     if weather_df is None or weather_df.empty:
         return None
@@ -289,7 +285,7 @@ def _build_weather_lookups(
             continue
         per_airport = group.droplevel("iata").copy()
         per_airport.index = per_airport.index.floor("h")
-        # Eliminar duplicados manteniendo el primer valor por hora.
+        # Remove duplicates keeping the first value per hour.
         per_airport = per_airport[~per_airport.index.duplicated(keep="first")]
         airport_weather[iata] = per_airport
 
@@ -304,45 +300,45 @@ def _build_history_lookups(
     airport_map: dict[str, int],
     window_delta: pd.Timedelta,
 ) -> HistoryLookups:
-    """Precomputa las series por (airport, hour_bucket) usadas como
-    lookups en feature engineering.
+    """Precompute the per-(airport, hour_bucket) series used as lookups in
+    feature engineering.
 
-    Las features Class B (que dependen de actuales) se agregan por la
-    hora *de llegada* (`arr_timestamp`) — así, al consultar `lag=k` desde
-    `current_end=T`, recogemos vuelos que aterrizaron en
-    [T - k·delta, T - (k-1)·delta), que están estrictamente antes de T.
+    Class B features (which depend on actuals) are aggregated by *arrival*
+    hour (`arr_timestamp`) — so, when querying `lag=k` from
+    `current_end=T`, we gather flights that landed in
+    [T - k·delta, T - (k-1)·delta), which are strictly before T.
 
-    Las features Class A (schedule) se agregan por la hora *programada*
-    de llegada o salida según corresponda — son válidas tanto para
-    ventanas pasadas como futuras.
+    Class A features (schedule) are aggregated by the *scheduled* arrival or
+    departure hour as appropriate — they are valid for both past and future
+    windows.
 
     Args:
-        df: DataFrame completo con `arr_timestamp` y `timestamp` ya
-            calculadas y ordenadas cronológicamente.
-        airport_map: Mapeo IATA → índice.
-        window_delta: Tamaño de ventana temporal (e.g. 1h o 2h).
+        df: Full DataFrame with `arr_timestamp` and `timestamp` already
+            computed and sorted chronologically.
+        airport_map: IATA → index map.
+        window_delta: Temporal window size (e.g. 1h or 2h).
 
     Returns:
-        ``HistoryLookups`` con todas las series precomputadas.
+        ``HistoryLookups`` with all precomputed series.
     """
     valid_airports = set(airport_map.keys())
 
-    # Normalizar a buckets alineados al inicio de la ventana.
-    # `pd.Timestamp.floor("Nh")` redondea hacia abajo a múltiplo del
-    # tamaño de la ventana.
+    # Normalize to buckets aligned to the start of the window.
+    # `pd.Timestamp.floor("Nh")` rounds down to a multiple of the window
+    # size.
     freq = f"{int(window_delta.total_seconds() // 3600)}h"
 
     df_arr = df.copy()
     df_arr["arr_bucket"] = df_arr["arr_timestamp"].dt.floor(freq)
     df_arr["dep_bucket"] = df_arr["timestamp"].dt.floor(freq)
 
-    # ── Class B: ArrDelay agrupado por (Dest, arr_bucket) ─────────────
+    # ── Class B: ArrDelay grouped by (Dest, arr_bucket) ───────────────
     arr_mask = df_arr["Dest"].isin(valid_airports) & df_arr["ArrDelay"].notna()
     arr_grp = df_arr[arr_mask].groupby(["Dest", "arr_bucket"], observed=True)
     arr_delay_by_airport_hour = arr_grp["ArrDelay"].mean().rename("arr_delay_mean")
 
-    # Rolling 6h por aeropuerto (sobre la serie horaria) — sirve como
-    # "media del comportamiento reciente" en cualquier T.
+    # Rolling 6h per airport (over the hourly series) — serves as the
+    # "mean recent behavior" at any T.
     rolling_steps = max(1, ROLLING_WINDOW_HOURS // max(1, int(window_delta.total_seconds() // 3600)))
     rolling_mean = (
         arr_delay_by_airport_hour
@@ -351,16 +347,16 @@ def _build_history_lookups(
         .mean()
         .reset_index(level=0, drop=True)
     )
-    # Para std necesitamos una serie con todas las observaciones de cada
-    # vuelo (no solo la media por bucket); aproximamos con std de las
-    # medias horarias en la ventana, suficiente como señal de volatilidad.
-    # Si ``rolling_steps == 1`` (caso degenerado donde la ventana cubre
-    # exactamente ROLLING_WINDOW_HOURS o más), pandas rechaza
-    # ``min_periods=2 > window=1``. En ese caso la std no es definible
-    # con una sola observación; clampamos ``min_periods`` para que el
-    # cálculo devuelva NaN (luego se rellena con 0.0). En todas las
-    # configs de producción (``temporal_window_hours`` ∈ {1, 2}) el
-    # clamp no se activa y la pérdida es estrictamente la misma.
+    # For std we would need a series with every flight's observations (not
+    # just the per-bucket mean); we approximate with the std of the hourly
+    # means in the window, enough as a volatility signal. If
+    # ``rolling_steps == 1`` (degenerate case where the window covers
+    # exactly ROLLING_WINDOW_HOURS or more), pandas rejects
+    # ``min_periods=2 > window=1``. In that case the std is undefined with a
+    # single observation; we clamp ``min_periods`` so the computation
+    # returns NaN (later filled with 0.0). In all production configs
+    # (``temporal_window_hours`` ∈ {1, 2}) the clamp does not trigger and
+    # the loss is strictly the same.
     rolling_std = (
         arr_delay_by_airport_hour
         .groupby(level=0, observed=True)
@@ -381,12 +377,12 @@ def _build_history_lookups(
             sched_arr_grp["Distance"].mean().rename("sched_arr_mean_distance")
         )
     else:
-        # Serie vacía con el mismo MultiIndex que la rama "with Distance"
-        # (``["Dest", "arr_bucket"]``) → todos los lookups dan default vía
-        # KeyError sin tropezar con ``IndexingError`` por una sola
-        # dimensión. En producción el loader siempre incluye ``Distance``
-        # (cf. ``src/data/loader.py``), así que esta rama solo fija el
-        # comportamiento de los tests sintéticos sin ``Distance``.
+        # Empty series with the same MultiIndex as the "with Distance"
+        # branch (``["Dest", "arr_bucket"]``) → all lookups return the
+        # default via KeyError without tripping on ``IndexingError`` from a
+        # single dimension. In production the loader always includes
+        # ``Distance`` (cf. ``src/data/loader.py``), so this branch only
+        # pins the behavior of the synthetic tests without ``Distance``.
         sched_arr_mean_distance = pd.Series(
             dtype="float32",
             name="sched_arr_mean_distance",
@@ -400,7 +396,7 @@ def _build_history_lookups(
     )
     sched_dep_count = sched_dep_grp.size().rename("sched_dep_count").astype("float32")
 
-    # ── Top-10 origins (estructural, una sola vez) ───────────────────
+    # ── Top-10 origins (structural, computed once) ───────────────────
     top10_origins = (
         df_arr[df_arr["Origin"].isin(valid_airports)]
         .groupby("Origin", observed=True).size()
@@ -416,9 +412,9 @@ def _build_history_lookups(
         .astype("float32")
     )
 
-    # ── Por ruta: ArrDelay reciente (rolling 6h) ─────────────────────
-    # Class B: agrupado por (Origin, Dest, arr_bucket) → mean ArrDelay,
-    # luego rolling sobre la dimensión temporal de cada ruta.
+    # ── Per route: recent ArrDelay (rolling 6h) ──────────────────────
+    # Class B: grouped by (Origin, Dest, arr_bucket) → mean ArrDelay, then
+    # rolling over each route's temporal dimension.
     route_arr_mask = (
         df_arr["Origin"].isin(valid_airports)
         & df_arr["Dest"].isin(valid_airports)
@@ -436,7 +432,7 @@ def _build_history_lookups(
         .reset_index(level=[0, 1], drop=True)
     )
 
-    # ── Por ruta: programación (Class A, dep_bucket) ─────────────────
+    # ── Per route: schedule (Class A, dep_bucket) ────────────────────
     route_sched_mask = (
         df_arr["Origin"].isin(valid_airports)
         & df_arr["Dest"].isin(valid_airports)
@@ -478,19 +474,19 @@ def _series_lookup(
 
 
 def _cyclic_encode(value: float, period: float) -> tuple[float, float]:
-    """Codificación sin/cos de una variable cíclica."""
+    """sin/cos encoding of a cyclic variable."""
     angle = 2.0 * np.pi * value / period
     return float(np.sin(angle)), float(np.cos(angle))
 
 
 def build_airport_mapping(airports: list[str]) -> dict[str, int]:
-    """Crea un mapeo de código IATA a índice numérico.
+    """Create a mapping from IATA code to numeric index.
 
     Args:
-        airports: Lista ordenada de códigos de aeropuerto.
+        airports: Sorted list of airport codes.
 
     Returns:
-        Diccionario {código_IATA: índice}.
+        Dictionary {IATA_code: index}.
     """
     return {code: idx for idx, code in enumerate(sorted(airports))}
 
@@ -500,36 +496,36 @@ def build_edge_index(
     airport_map: dict[str, int],
     min_flights: int = 50,
 ) -> tuple[torch.Tensor, torch.Tensor, list[tuple[str, str]]]:
-    """Construye la matriz de adyacencia y las features estáticas de arista.
+    """Build the adjacency matrix and the static edge features.
 
-    Crea aristas bidireccionales entre aeropuertos que tienen al menos
-    `min_flights` vuelos en el dataset y devuelve un tensor con 3
-    features estáticas por arista (Class A: derivables del schedule):
+    Creates bidirectional edges between airports that have at least
+    `min_flights` flights in the dataset and returns a tensor with 3 static
+    features per edge (Class A: derivable from the schedule):
 
-      Col 0  flight_count_norm        — recuento histórico normalizado
-      Col 1  mean_air_time_norm       — AirTime medio histórico
-      Col 2  mean_scheduled_distance  — Distance media (Class A)
+      Col 0  flight_count_norm        — normalized historical count
+      Col 1  mean_air_time_norm       — mean historical AirTime
+      Col 2  mean_scheduled_distance  — mean Distance (Class A)
 
-    Estas tres features no cambian entre snapshots; las dos restantes
-    (recent_route_delay, scheduled_flights_next_h_norm) se concatenan
-    por snapshot en `compute_dynamic_edge_attr` para llegar a un
-    `edge_attr` final de shape ``[num_edges, 5]``.
+    These three features do not change between snapshots; the remaining two
+    (recent_route_delay, scheduled_flights_next_h_norm) are concatenated per
+    snapshot in `compute_dynamic_edge_attr` to reach a final `edge_attr` of
+    shape ``[num_edges, 5]``.
 
     Args:
-        df: DataFrame con columnas Origin, Dest y opcionalmente
-            AirTime / Distance.
-        airport_map: Mapeo de código IATA a índice.
-        min_flights: Mínimo de vuelos para crear una arista.
+        df: DataFrame with Origin, Dest and optionally AirTime / Distance
+            columns.
+        airport_map: IATA code → index map.
+        min_flights: Minimum number of flights to create an edge.
 
     Returns:
-        Tupla de:
+        Tuple of:
           * ``edge_index`` ``[2, num_edges]``
           * ``static_edge_attr`` ``[num_edges, 3]``
-          * ``edge_pairs`` lista de ``(origin_iata, dest_iata)`` por
-            cada arista en orden — usada para construir features
-            dinámicas vía lookup en ``HistoryLookups``.
+          * ``edge_pairs`` list of ``(origin_iata, dest_iata)`` per edge in
+            order — used to build dynamic features via lookup in
+            ``HistoryLookups``.
     """
-    # Agregaciones por ruta direccional.
+    # Aggregations per directional route.
     agg_dict: dict = {"count": ("Origin", "size")}
     if "AirTime" in df.columns:
         agg_dict["mean_air_time"] = ("AirTime", "mean")
@@ -542,7 +538,7 @@ def build_edge_index(
         .reset_index()
     )
 
-    # Filtrar rutas con pocos vuelos y aeropuertos no mapeados.
+    # Filter routes with few flights and unmapped airports.
     route_stats = route_stats[route_stats["count"] >= min_flights]
     valid = set(airport_map.keys())
     route_stats = route_stats[
@@ -565,9 +561,9 @@ def build_edge_index(
         c = float(row["count"])
         at = float(row["mean_air_time"]) if has_air_time and not pd.isna(row["mean_air_time"]) else 0.0
         di = float(row["mean_distance"]) if has_distance and not pd.isna(row["mean_distance"]) else 0.0
-        # Arista bidireccional con las mismas estadísticas (la ruta
-        # X→Y y Y→X comparten distancia y tiempo medio aéreo; los
-        # delays direccionales viven en `route_recent_arr_delay`).
+        # Bidirectional edge with the same statistics (routes X→Y and Y→X
+        # share distance and mean air time; the directional delays live in
+        # `route_recent_arr_delay`).
         sources.extend([src, dst])
         targets.extend([dst, src])
         counts.extend([c, c])
@@ -592,8 +588,8 @@ def build_edge_index(
     static_edge_attr = torch.stack([counts_t, air_times_t, distances_t], dim=1)
 
     logger.info(
-        "Grafo construido: %d nodos, %d aristas (min_flights=%d), "
-        "edge_attr estático shape=%s",
+        "Graph built: %d nodes, %d edges (min_flights=%d), "
+        "static edge_attr shape=%s",
         len(airport_map), edge_index.shape[1], min_flights,
         tuple(static_edge_attr.shape),
     )
@@ -609,20 +605,18 @@ def compute_dynamic_edge_attr(
     arr_delay_norm: float = 60.0,
     sched_count_norm: float = 50.0,
 ) -> torch.Tensor:
-    """Calcula las 2 features de arista dinámicas para un snapshot.
+    """Compute the 2 dynamic edge features for a snapshot.
 
-    Devuelve ``[num_edges, 2]`` con:
+    Returns ``[num_edges, 2]`` with:
 
-      Col 0  recent_route_delay_norm        — rolling 6h ArrDelay por
-              ruta normalizado (clip ±1) — bucket inmediatamente
-              anterior a ``current_end`` (Class B).
-      Col 1  scheduled_flights_next_h_norm  — recuento de vuelos
-              programados en la ruta para la primera ventana del target
-              normalizado (Class A).
+      Col 0  recent_route_delay_norm        — rolling 6h ArrDelay per route,
+              normalized (clip ±1) — bucket immediately before
+              ``current_end`` (Class B).
+      Col 1  scheduled_flights_next_h_norm  — normalized count of flights
+              scheduled on the route for the first target window (Class A).
 
-    Los normalizadores son constantes para mantener la escala estable
-    entre snapshots; el ``normalize_features=true`` posterior ajusta el
-    rango final.
+    The normalizers are constant to keep the scale stable between snapshots;
+    the later ``normalize_features=true`` adjusts the final range.
     """
     bucket_size = f"{int(window_delta.total_seconds() // 3600)}h"
     history_bucket = (current_end - window_delta).floor(bucket_size)
@@ -635,8 +629,8 @@ def compute_dynamic_edge_attr(
     sched = history_lookups.route_sched_count
 
     for i, (origin, dest) in enumerate(edge_pairs):
-        # Recent route delay: lookup (origin, dest, history_bucket) en
-        # la serie pre-rolling. Default 0 si la ruta no tuvo vuelos.
+        # Recent route delay: lookup (origin, dest, history_bucket) in the
+        # pre-rolling series. Default 0 if the route had no flights.
         try:
             v = recent.loc[(origin, dest, history_bucket)]
             if not pd.isna(v):
@@ -644,7 +638,7 @@ def compute_dynamic_edge_attr(
         except KeyError:
             pass
 
-        # Scheduled flights en la siguiente ventana del target.
+        # Scheduled flights in the next target window.
         try:
             c = sched.loc[(origin, dest, target_bucket)]
             if not pd.isna(c):
@@ -652,7 +646,7 @@ def compute_dynamic_edge_attr(
         except KeyError:
             pass
 
-    # Clip a un rango estable para que el outlier no domine.
+    # Clip to a stable range so the outlier does not dominate.
     out[:, 0].clamp_(-1.0, 1.0)
     out[:, 1].clamp_(0.0, 1.0)
     return out
@@ -663,23 +657,23 @@ def compute_node_features(
     airport_map: dict[str, int],
     delay_threshold: float = 15.0,
 ) -> torch.Tensor:
-    """Calcula features por aeropuerto para una ventana temporal.
+    """Compute per-airport features for a time window.
 
-    Features por nodo (aeropuerto como origen):
-    - avg_dep_delay: Retraso de salida promedio
-    - std_dep_delay: Desviación estándar del retraso
-    - pct_delayed: Porcentaje de vuelos con retraso > umbral
-    - num_flights: Número de vuelos (normalizado)
-    - avg_arr_delay_incoming: Retraso de llegada promedio (como destino)
-    - std_arr_delay_incoming: Desviación estándar del retraso de llegada
+    Per-node features (airport as origin):
+    - avg_dep_delay: Average departure delay
+    - std_dep_delay: Standard deviation of the delay
+    - pct_delayed: Percentage of flights with delay > threshold
+    - num_flights: Number of flights (normalized)
+    - avg_arr_delay_incoming: Average arrival delay (as destination)
+    - std_arr_delay_incoming: Standard deviation of the arrival delay
 
     Args:
-        window_df: DataFrame filtrado a una ventana temporal.
-        airport_map: Mapeo de código IATA a índice.
-        delay_threshold: Umbral de minutos para considerar un vuelo retrasado.
+        window_df: DataFrame filtered to a time window.
+        airport_map: IATA code → index map.
+        delay_threshold: Minutes threshold to consider a flight delayed.
 
     Returns:
-        Tensor de node features [num_nodes, num_features].
+        Node features tensor [num_nodes, num_features].
     """
     num_nodes = len(airport_map)
     num_features = 6
@@ -688,7 +682,7 @@ def compute_node_features(
     if window_df.empty:
         return features
 
-    # Features como aeropuerto de ORIGEN
+    # Features as ORIGIN airport
     origin_groups = window_df.groupby("Origin")
     for airport, group in origin_groups:
         if airport not in airport_map:
@@ -700,7 +694,7 @@ def compute_node_features(
         features[idx, 2] = np.mean(dep_delays > delay_threshold)
         features[idx, 3] = len(dep_delays)
 
-    # Features como aeropuerto de DESTINO (retrasos de llegada)
+    # Features as DESTINATION airport (arrival delays)
     dest_groups = window_df.groupby("Dest")
     for airport, group in dest_groups:
         if airport not in airport_map:
@@ -710,12 +704,12 @@ def compute_node_features(
         features[idx, 4] = np.nanmean(arr_delays)
         features[idx, 5] = np.nanstd(arr_delays) if len(arr_delays) > 1 else 0.0
 
-    # Normalizar num_flights
+    # Normalize num_flights
     max_flights = features[:, 3].max()
     if max_flights > 0:
         features[:, 3] = features[:, 3] / max_flights
 
-    # Reemplazar NaN por 0
+    # Replace NaN with 0
     features = torch.nan_to_num(features, nan=0.0)
 
     return features
@@ -732,44 +726,42 @@ def compute_node_features_rich(
     delay_threshold: float = 15.0,
     weather_lookups: WeatherLookups | None = None,
 ) -> torch.Tensor:
-    """Versión enriquecida de ``compute_node_features``.
+    """Enriched version of ``compute_node_features``.
 
-    Devuelve un vector denso por nodo organizado en bloques con tamaños
-    fijos (la dimensión total depende de ``len(prediction_horizons)`` y
-    de si la meteorología está activa):
+    Returns a dense per-node vector organized into fixed-size blocks (the
+    total dimension depends on ``len(prediction_horizons)`` and on whether
+    weather is active):
 
-      Bloque                                      | tamaño
+      Block                                       | size
       --------------------------------------------|-------
       A) Aggregates current window (Class B)      | 9
-      B) Volumen / disrupción (Class A+B)         | 4
-      C) Causas BTS (Class B, mean per cause)     | 5
-      D) Lags ArrDelay (Class B, vía lookup)      | len(ARR_DELAY_LAGS)
+      B) Volume / disruption (Class A+B)          | 4
+      C) BTS causes (Class B, mean per cause)     | 5
+      D) ArrDelay lags (Class B, via lookup)      | len(ARR_DELAY_LAGS)
       E) Rolling 6h mean+std (Class B, lookup)    | 2
-      F) Calendario cíclico de la ventana actual  | 6
-      G) Exógenas futuras por horizonte (Class A) | 5 × len(horizons)
-      H) Meteorología (opcional)                  | 9 + 9 × len(horizons)
-         si ``weather_lookups is not None``       |
+      F) Cyclic calendar of the current window    | 6
+      G) Future exogenous per horizon (Class A)   | 5 × len(horizons)
+      H) Weather (optional)                       | 9 + 9 × len(horizons)
+         if ``weather_lookups is not None``       |
 
-    Para 5 horizontes sin meteorología → 55 features por nodo. Con
-    meteorología activa → 55 + 9 + 9·5 = 109 features. Si se desactiva
-    el bloque H queda omitido y el feature dim vuelve al valor anterior
-    sin romper modelos ya entrenados (la primera capa de cada modelo
-    se construye via factory con ``input_dim`` derivado del primer
-    snapshot).
+    For 5 horizons without weather → 55 features per node. With weather
+    active → 55 + 9 + 9·5 = 109 features. If block H is disabled it is
+    omitted and the feature dim returns to the previous value without
+    breaking already-trained models (each model's first layer is built via
+    the factory with ``input_dim`` derived from the first snapshot).
 
     Args:
-        window_df: vuelos completados en la ventana de input
-            ``[current_end - window_delta, current_end)`` — usados para
-            las agregaciones del bloque A, B (parcial), C.
-        airport_map: IATA → índice.
-        current_end: instante T que cierra la ventana de input.
-        window_delta: duración de la ventana.
-        prediction_horizons: horizontes futuros (e.g. [1,2,4,6,8]).
-        history_lookups: estructuras precomputadas.
-        delay_threshold: umbral en min para % delayed.
-        weather_lookups: estructura precomputada de meteorología. ``None``
-            desactiva el bloque H (default — preserva el contrato
-            histórico).
+        window_df: flights completed in the input window
+            ``[current_end - window_delta, current_end)`` — used for the
+            aggregations of blocks A, B (partial), C.
+        airport_map: IATA → index.
+        current_end: instant T that closes the input window.
+        window_delta: window duration.
+        prediction_horizons: future horizons (e.g. [1,2,4,6,8]).
+        history_lookups: precomputed structures.
+        delay_threshold: threshold in min for % delayed.
+        weather_lookups: precomputed weather structure. ``None`` disables
+            block H (default — preserves the historical contract).
     """
     num_nodes = len(airport_map)
     n_lags = len(ARR_DELAY_LAGS)
@@ -779,17 +771,17 @@ def compute_node_features_rich(
         feat_dim += WEATHER_BLOCK_HIST_SIZE + WEATHER_BLOCK_FUTURE_SIZE_PER_H * n_horizons
     features = torch.zeros(num_nodes, feat_dim, dtype=torch.float32)
 
-    # Class B (post-hoc) features solo pueden derivarse de vuelos cuyo
-    # arr_timestamp < current_end (i.e., el vuelo ha aterrizado antes de T).
-    # Ver INVARIANTE DE FUGA en el module docstring.
+    # Class B (post-hoc) features can only be derived from flights whose
+    # arr_timestamp < current_end (i.e., the flight landed before T).
+    # See LEAKAGE INVARIANT in the module docstring.
     if "arr_timestamp" in window_df.columns and not window_df.empty:
         completed_df = window_df[window_df["arr_timestamp"] < current_end]
     else:
         completed_df = window_df
 
-    # ── A. Aggregates de la ventana actual (Class B → completed_df) ──
+    # ── A. Aggregates of the current window (Class B → completed_df) ──
     if not completed_df.empty:
-        # Por destino: ArrDelay (signal headline, alineado con el target).
+        # By destination: ArrDelay (headline signal, aligned with the target).
         dest_g = completed_df.groupby("Dest", observed=True)
         for airport, group in dest_g:
             if airport not in airport_map:
@@ -809,7 +801,7 @@ def compute_node_features_rich(
                 if ti.size > 0:
                     features[i, 8] = float(np.mean(ti))
 
-        # Por origen: DepDelay (estado endógeno) + TaxiOut.
+        # By origin: DepDelay (endogenous state) + TaxiOut.
         ori_g = completed_df.groupby("Origin", observed=True)
         for airport, group in ori_g:
             if airport not in airport_map:
@@ -823,17 +815,17 @@ def compute_node_features_rich(
             if "TaxiOut" in group.columns:
                 to = group["TaxiOut"].dropna().values
                 if to.size > 0:
-                    # Reusa la columna 8 si TaxiIn faltó; si ambas existen,
-                    # promediamos para evitar inflar la dimensión.
+                    # Reuse column 8 if TaxiIn was missing; if both exist,
+                    # we average to avoid inflating the dimension.
                     if features[i, 8] != 0.0:
                         features[i, 8] = (features[i, 8] + float(np.mean(to))) / 2.0
                     else:
                         features[i, 8] = float(np.mean(to))
 
-    # ── B. Volumen / disrupción ─────────────────────────────────────
-    # 9: num_arrivals_completed (Class B: solo vuelos ya aterrizados)
-    # 10: num_departures_completed (Class A-ish: schedule del input window)
-    # 11: num_cancellations  12: num_diversions  (Class A: conocidas a priori)
+    # ── B. Volume / disruption ───────────────────────────────────────
+    # 9: num_arrivals_completed (Class B: only flights that already landed)
+    # 10: num_departures_completed (Class A-ish: input-window schedule)
+    # 11: num_cancellations  12: num_diversions  (Class A: known a priori)
     if not completed_df.empty:
         for airport, group in completed_df.groupby("Dest", observed=True):
             if airport in airport_map:
@@ -852,13 +844,13 @@ def compute_node_features_rich(
             for airport, group in diverted_df.groupby("Origin", observed=True):
                 if airport in airport_map:
                     features[airport_map[airport], 12] = float(len(group))
-        # Normalizar arrivals/departures por máximo del snapshot.
+        # Normalize arrivals/departures by the snapshot maximum.
         for col in (9, 10):
             mx = float(features[:, col].max())
             if mx > 0:
                 features[:, col] = features[:, col] / mx
 
-    # ── C. BTS causas (Class B → completed_df, por destino) ──────────
+    # ── C. BTS causes (Class B → completed_df, by destination) ───────
     if not completed_df.empty:
         bts_present = [c for c in BTS_CAUSE_COLUMNS if c in completed_df.columns]
         if bts_present:
@@ -871,7 +863,7 @@ def compute_node_features_rich(
                         v = group[col].mean()
                         features[i, 13 + k] = 0.0 if pd.isna(v) else float(v)
 
-    # ── D. Lags ArrDelay (lookup en serie horaria precomputada) ──────
+    # ── D. ArrDelay lags (lookup in the precomputed hourly series) ───
     base_col = 13 + 5
     for lag_idx, lag in enumerate(ARR_DELAY_LAGS):
         bucket = (current_end - lag * window_delta).floor(
@@ -882,7 +874,7 @@ def compute_node_features_rich(
                 history_lookups.arr_delay_by_airport_hour, airport, bucket
             )
 
-    # ── E. Rolling 6h mean+std (lookup en bucket previo a current_end) ─
+    # ── E. Rolling 6h mean+std (lookup in the bucket before current_end) ─
     base_col += n_lags
     rolling_bucket = (current_end - window_delta).floor(
         f"{int(window_delta.total_seconds() // 3600)}h"
@@ -895,7 +887,7 @@ def compute_node_features_rich(
             history_lookups.rolling_std_arr_delay, airport, rolling_bucket
         )
 
-    # ── F. Calendario cíclico (mismo valor para todos los nodos) ─────
+    # ── F. Cyclic calendar (same value for all nodes) ────────────────
     base_col += 2
     h_sin, h_cos = _cyclic_encode(current_end.hour, 24)
     dow_sin, dow_cos = _cyclic_encode(current_end.dayofweek, 7)
@@ -904,7 +896,7 @@ def compute_node_features_rich(
                           dtype=torch.float32)
     features[:, base_col:base_col + 6] = cyclic.unsqueeze(0).expand(num_nodes, -1)
 
-    # ── G. Exógenas futuras por horizonte (Class A) ──────────────────
+    # ── G. Future exogenous per horizon (Class A) ────────────────────
     base_col += 6
     bucket_size = f"{int(window_delta.total_seconds() // 3600)}h"
     for h_idx, h in enumerate(prediction_horizons):
@@ -924,21 +916,22 @@ def compute_node_features_rich(
             features[i, col_offset + 3] = _series_lookup(
                 history_lookups.sched_arr_mean_distance, airport, h_bucket
             )
-        # Hora-del-día del centro del horizonte target (cíclica, 1 nº).
-        # Usamos sin como única columna por horizonte para no añadir 2×5
-        # más; el coseno se omite porque la hora del día es ya rica en C.
+        # Hour-of-day at the center of the target horizon (cyclic, 1 value).
+        # We use sin as the only column per horizon to avoid adding 2×5
+        # more; the cosine is omitted because the hour of day is already
+        # rich in C.
         target_center_hour = (h_start + window_delta / 2).hour
         h_sin_target, _ = _cyclic_encode(target_center_hour, 24)
         features[:, col_offset + 4] = h_sin_target
 
-    # ── H. Meteorología (opcional, exógena) ──────────────────────────
-    # H1: agregados sobre la ventana de input [current_end - W, current_end).
-    # H2: observación puntual a T + (h - 0.5)·W por horizonte (centro de
-    #     la ventana objetivo) — "perfect-forecast proxy". El target del
-    #     modelo es el delay en T+h, no el tiempo; la meteorología es
-    #     exógena y NO viola la invariante de leakage.
+    # ── H. Weather (optional, exogenous) ─────────────────────────────
+    # H1: aggregates over the input window [current_end - W, current_end).
+    # H2: point observation at T + (h - 0.5)·W per horizon (center of the
+    #     target window) — "perfect-forecast proxy". The model target is
+    #     the delay at T+h, not the weather; the weather is exogenous and
+    #     does NOT violate the leakage invariant.
     if weather_lookups is not None and not weather_lookups.empty():
-        base_col += 5 * n_horizons  # saltamos el bloque G ya escrito
+        base_col += 5 * n_horizons  # skip the already-written block G
         hist_start = current_end - window_delta
         hist_end = current_end
         for airport, i in airport_map.items():
@@ -957,7 +950,7 @@ def compute_node_features_rich(
                     torch.from_numpy(obs)
                 )
 
-    # ── normalización final: clip + nan→0 ────────────────────────────
+    # ── final normalization: clip + nan→0 ────────────────────────────
     return torch.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
 
 
@@ -965,22 +958,22 @@ def compute_node_targets(
     window_df: pd.DataFrame,
     airport_map: dict[str, int],
 ) -> torch.Tensor:
-    """Genera targets continuos: retraso promedio de LLEGADA por aeropuerto.
+    """Generate continuous targets: average ARRIVAL delay per airport.
 
-    Calcula el retraso promedio (en minutos) con el que aterrizan los
-    vuelos en cada aeropuerto destino dentro de la ventana temporal
-    futura. ArrDelay es el target natural para una GNN de propagación: el
-    retraso "fluye" por las aristas X→Y como `DepDelay_X` y aterriza como
-    `ArrDelay_Y`. Predecir DepDelay (versión anterior) es en gran medida
-    endógeno al aeropuerto y un modelo denso lo iguala.
+    Computes the average delay (in minutes) with which flights land at each
+    destination airport within the future time window. ArrDelay is the
+    natural target for a propagation GNN: the delay "flows" along edges X→Y
+    as `DepDelay_X` and lands as `ArrDelay_Y`. Predicting DepDelay (previous
+    version) is largely endogenous to the airport and a dense model matches
+    it.
 
     Args:
-        window_df: DataFrame de la ventana FUTURA (target), filtrado por
-            arr_timestamp (vuelos que LLEGAN en la ventana).
-        airport_map: Mapeo de código IATA a índice.
+        window_df: DataFrame of the FUTURE (target) window, filtered by
+            arr_timestamp (flights that ARRIVE in the window).
+        airport_map: IATA code → index map.
 
     Returns:
-        Tensor continuo [num_nodes] con retraso medio de llegada (min).
+        Continuous tensor [num_nodes] with mean arrival delay (min).
     """
     num_nodes = len(airport_map)
     targets = torch.zeros(num_nodes, dtype=torch.float32)
@@ -998,12 +991,12 @@ def compute_node_targets(
     return torch.nan_to_num(targets, nan=0.0)
 
 
-# Índices de canal estables para el tensor de target multi-tarea.
-# Todo el código (modelos, losses, métricas, reporting) referencia estos
-# nombres para evitar números mágicos y mantener el contrato sincronizado.
-TARGET_CHANNEL_ARR_DELAY = 0  # mean ArrDelay (min) — regresión primaria
-TARGET_CHANNEL_DEP_DELAY = 1  # mean DepDelay (min) — regresión auxiliar
-TARGET_CHANNEL_PCT_DELAYED = 2  # fracción ArrDelay≥threshold ∈ [0, 1] — BCE
+# Stable channel indices for the multi-task target tensor.
+# All code (models, losses, metrics, reporting) references these names to
+# avoid magic numbers and keep the contract synchronized.
+TARGET_CHANNEL_ARR_DELAY = 0  # mean ArrDelay (min) — primary regression
+TARGET_CHANNEL_DEP_DELAY = 1  # mean DepDelay (min) — auxiliary regression
+TARGET_CHANNEL_PCT_DELAYED = 2  # fraction ArrDelay≥threshold ∈ [0, 1] — BCE
 NUM_TARGET_CHANNELS = 3
 
 
@@ -1012,31 +1005,31 @@ def compute_node_targets_multi_channel(
     airport_map: dict[str, int],
     delay_threshold: float = 15.0,
 ) -> torch.Tensor:
-    """Versión multi-canal de :func:`compute_node_targets`.
+    """Multi-channel version of :func:`compute_node_targets`.
 
-    Devuelve ``[num_nodes, NUM_TARGET_CHANNELS]`` con los tres canales
-    documentados en ``TARGET_CHANNEL_*``:
+    Returns ``[num_nodes, NUM_TARGET_CHANNELS]`` with the three channels
+    documented in ``TARGET_CHANNEL_*``:
 
-      0) mean ArrDelay (min) por aeropuerto destino — target principal.
-      1) mean DepDelay (min) por aeropuerto destino — regresión auxiliar
+      0) mean ArrDelay (min) per destination airport — primary target.
+      1) mean DepDelay (min) per destination airport — auxiliary regression
          (multi-task regularizer).
-      2) fracción de vuelos con ``ArrDelay >= delay_threshold`` ∈ [0, 1]
-         por aeropuerto destino — clasificación binaria a la que apunta
-         el head BCE del modelo multi-tarea.
+      2) fraction of flights with ``ArrDelay >= delay_threshold`` ∈ [0, 1]
+         per destination airport — binary classification targeted by the
+         BCE head of the multi-task model.
 
-    Todos los canales se computan sobre la **misma** ventana (los vuelos
-    que llegan a Dest=airport en ``[h_start, h_end)``), por lo que NaN
-    en alguno se rellena con 0 igual que en la versión single-channel.
+    All channels are computed over the **same** window (flights arriving at
+    Dest=airport in ``[h_start, h_end)``), so any NaN is filled with 0 just
+    like in the single-channel version.
 
     Args:
-        window_df: DataFrame de la ventana FUTURA (target), filtrado por
-            ``arr_timestamp`` (vuelos que LLEGAN en la ventana).
-        airport_map: Mapeo IATA → índice.
-        delay_threshold: Minutos de ArrDelay sobre los que un vuelo se
-            considera "retrasado" para el canal 2.
+        window_df: DataFrame of the FUTURE (target) window, filtered by
+            ``arr_timestamp`` (flights that ARRIVE in the window).
+        airport_map: IATA → index map.
+        delay_threshold: ArrDelay minutes above which a flight is considered
+            "delayed" for channel 2.
 
     Returns:
-        Tensor ``[num_nodes, 3]`` (canales: arr_delay, dep_delay,
+        Tensor ``[num_nodes, 3]`` (channels: arr_delay, dep_delay,
         pct_arr_delayed_15).
     """
     num_nodes = len(airport_map)
@@ -1074,27 +1067,27 @@ def compute_multi_horizon_targets(
     horizons: list[int],
     delay_threshold: float = 15.0,
 ) -> torch.Tensor | None:
-    """Genera targets multi-horizonte multi-canal.
+    """Generate multi-horizon multi-channel targets.
 
-    Para cada horizonte h en ``horizons``, computa los 3 canales de
-    target sobre los vuelos que LLEGAN en la ventana
-    ``[current_end + (h-1)*delta, current_end + h*delta)``. Ver
-    :func:`compute_node_targets_multi_channel` para la semántica de cada
-    canal.
+    For each horizon h in ``horizons``, computes the 3 target channels over
+    the flights that ARRIVE in the window
+    ``[current_end + (h-1)*delta, current_end + h*delta)``. See
+    :func:`compute_node_targets_multi_channel` for the semantics of each
+    channel.
 
     Args:
-        df: DataFrame completo con columna ``arr_timestamp`` (preferido)
-            o ``timestamp`` (fallback).
-        airport_map: Mapeo IATA → índice.
-        current_end: Fin de la ventana actual de features.
-        window_delta: Duración de cada ventana temporal.
-        horizons: Lista de horizontes (e.g., ``[1, 2, 4, 6, 8]``).
-        delay_threshold: Umbral en minutos para el canal de clasificación.
+        df: Full DataFrame with an ``arr_timestamp`` column (preferred) or
+            ``timestamp`` (fallback).
+        airport_map: IATA → index map.
+        current_end: End of the current features window.
+        window_delta: Duration of each time window.
+        horizons: List of horizons (e.g., ``[1, 2, 4, 6, 8]``).
+        delay_threshold: Threshold in minutes for the classification channel.
 
     Returns:
-        Tensor ``[num_nodes, num_horizons, NUM_TARGET_CHANNELS]`` o
-        ``None`` si algún horizonte no tiene >=10 vuelos (proxy de "datos
-        suficientes" — heredado de la versión anterior).
+        Tensor ``[num_nodes, num_horizons, NUM_TARGET_CHANNELS]`` or
+        ``None`` if any horizon has fewer than 10 flights (proxy for
+        "enough data" — inherited from the previous version).
     """
     num_nodes = len(airport_map)
     num_horizons = len(horizons)
@@ -1102,9 +1095,9 @@ def compute_multi_horizon_targets(
         num_nodes, num_horizons, NUM_TARGET_CHANNELS, dtype=torch.float32,
     )
 
-    # La columna `arr_timestamp` (creada en `create_temporal_graphs`) es la
-    # clave correcta para la ventana del target: queremos los vuelos que
-    # ATERRIZAN en [h_start, h_end), no los que despegan.
+    # The `arr_timestamp` column (created in `create_temporal_graphs`) is
+    # the correct key for the target window: we want the flights that LAND
+    # in [h_start, h_end), not those that take off.
     arr_col = "arr_timestamp" if "arr_timestamp" in df.columns else "timestamp"
 
     for h_idx, h in enumerate(horizons):
@@ -1134,36 +1127,36 @@ def create_temporal_graphs(
     prediction_horizons: list[int] | None = None,
     weather_lookups: WeatherLookups | None = None,
 ) -> list[Data]:
-    """Crea snapshots de grafos temporales a partir de datos de vuelos.
+    """Create temporal graph snapshots from flight data.
 
-    Divide los datos en ventanas temporales y genera un grafo por ventana.
-    Las features de cada nodo son las estadísticas de retraso del aeropuerto
-    en esa ventana. El target es el retraso promedio en ventanas futuras.
+    Splits the data into time windows and generates one graph per window.
+    Each node's features are the airport's delay statistics in that window.
+    The target is the average delay in future windows.
 
-    Cuando prediction_horizons es None o [1], genera targets single-horizon
-    [num_nodes] (compatible con BasicGCN). Cuando tiene múltiples valores
-    (e.g., [1, 2, 3, 4, 5]), genera targets multi-horizonte [num_nodes,
-    num_horizons] para MultiHorizonGAT.
+    When prediction_horizons is None or [1], it generates single-horizon
+    targets [num_nodes] (compatible with BasicGCN). When it has multiple
+    values (e.g., [1, 2, 3, 4, 5]), it generates multi-horizon targets
+    [num_nodes, num_horizons] for MultiHorizonGAT.
 
     Args:
-        df: DataFrame preprocesado con FlightDate y Hour.
-        airport_map: Mapeo de código IATA a índice.
-        edge_index: Matriz de adyacencia [2, num_edges].
-        edge_attr_static: Features estáticas de arista [num_edges, 3].
-        edge_pairs: Lista de ``(origin_iata, dest_iata)`` por arista.
-        window_hours: Horas por ventana temporal.
-        delay_threshold: Umbral de retraso en minutos.
-        prediction_horizons: Lista de horizontes futuros (e.g., [1,2,3,4,5]).
-            None o [1] usa modo single-horizon (retrocompatible).
+        df: Preprocessed DataFrame with FlightDate and Hour.
+        airport_map: IATA code → index map.
+        edge_index: Adjacency matrix [2, num_edges].
+        edge_attr_static: Static edge features [num_edges, 3].
+        edge_pairs: List of ``(origin_iata, dest_iata)`` per edge.
+        window_hours: Hours per time window.
+        delay_threshold: Delay threshold in minutes.
+        prediction_horizons: List of future horizons (e.g., [1,2,3,4,5]).
+            None or [1] uses single-horizon mode (backward-compatible).
 
     Returns:
-        Lista de objetos Data de PyG (un grafo por ventana).
+        List of PyG Data objects (one graph per window).
     """
     multi_horizon = (
         prediction_horizons is not None and len(prediction_horizons) > 1
     )
 
-    # Crear timestamp combinando FlightDate + Hour
+    # Create timestamp by combining FlightDate + Hour
     df = df.copy()
     if "Hour" not in df.columns:
         df["Hour"] = (df["CRSDepTime"] // 100).clip(0, 23)
@@ -1172,12 +1165,12 @@ def create_temporal_graphs(
         df["Hour"], unit="h"
     )
 
-    # Crear arr_timestamp basado en CRSArrTime (la hora *programada* de
-    # llegada). Es la clave correcta para la ventana del target: queremos
-    # los vuelos que LLEGAN al destino en [h_start, h_end), no los que
-    # despegan. Si CRSArrTime < CRSDepTime suponemos vuelo nocturno y
-    # sumamos un día (los vuelos que cruzan la frontera del día se
-    # detectan correctamente para horarios típicos en EE.UU.).
+    # Create arr_timestamp based on CRSArrTime (the *scheduled* arrival
+    # hour). It is the correct key for the target window: we want the
+    # flights that ARRIVE at the destination in [h_start, h_end), not those
+    # that take off. If CRSArrTime < CRSDepTime we assume an overnight
+    # flight and add a day (flights crossing the day boundary are detected
+    # correctly for typical U.S. schedules).
     if "CRSArrTime" in df.columns:
         arr_hour = (df["CRSArrTime"] // 100).clip(0, 23).astype("Int16")
         crosses_midnight = (df["CRSArrTime"] < df["CRSDepTime"]).fillna(False)
@@ -1187,20 +1180,21 @@ def create_temporal_graphs(
             + pd.to_timedelta(crosses_midnight.astype(int), unit="D")
         )
     else:
-        # Fallback: si no se cargó CRSArrTime, usar la hora de salida como
-        # proxy. Mantiene retrocompatibilidad con tests/datos antiguos pero
-        # introduce un sesgo (subestima cuántos vuelos llegan en la ventana).
+        # Fallback: if CRSArrTime was not loaded, use the departure hour as
+        # a proxy. Keeps backward compatibility with old tests/data but
+        # introduces a bias (underestimates how many flights arrive in the
+        # window).
         df["arr_timestamp"] = df["timestamp"]
 
-    # Ordenar por timestamp
+    # Sort by timestamp
     df = df.sort_values("timestamp").reset_index(drop=True)
 
-    # Crear ventanas temporales
+    # Create time windows
     min_time = df["timestamp"].min()
     max_time = df["timestamp"].max()
     window_delta = pd.Timedelta(hours=window_hours)
 
-    # Calcular cuántas ventanas futuras necesitamos
+    # Compute how many future windows we need
     horizons_for_features = prediction_horizons if multi_horizon else [1]
     if multi_horizon:
         max_horizon = max(prediction_horizons)
@@ -1208,15 +1202,15 @@ def create_temporal_graphs(
     else:
         lookahead = window_delta
 
-    # Precomputar lookups históricos y exógenos. Se calculan una sola vez
-    # sobre el dataset entero — cada snapshot consulta valores en O(N·H).
+    # Precompute historical and exogenous lookups. They are computed once
+    # over the entire dataset — each snapshot queries values in O(N·H).
     history_lookups = _build_history_lookups(df, airport_map, window_delta)
 
     graphs = []
     current_time = min_time
 
     while current_time + window_delta + lookahead <= max_time:
-        # Ventana actual (features)
+        # Current window (features)
         window_mask = (
             (df["timestamp"] >= current_time)
             & (df["timestamp"] < current_time + window_delta)
@@ -1230,9 +1224,9 @@ def create_temporal_graphs(
         current_end = current_time + window_delta
 
         if multi_horizon:
-            # Targets multi-horizonte multi-canal: [num_nodes, num_horizons, 3]
-            # (arr_delay, dep_delay, pct_arr_delayed_15). El canal de
-            # clasificación necesita el umbral, así que se propaga al builder.
+            # Multi-horizon multi-channel targets: [num_nodes, num_horizons, 3]
+            # (arr_delay, dep_delay, pct_arr_delayed_15). The classification
+            # channel needs the threshold, so it is propagated to the builder.
             node_targets = compute_multi_horizon_targets(
                 df, airport_map, current_end, window_delta,
                 prediction_horizons,
@@ -1242,8 +1236,8 @@ def create_temporal_graphs(
                 current_time += window_delta
                 continue
         else:
-            # Targets single-horizon: [num_nodes] (retrocompatible).
-            # Usar arr_timestamp por la misma razón que el caso multi-horizon.
+            # Single-horizon targets: [num_nodes] (backward-compatible).
+            # Use arr_timestamp for the same reason as the multi-horizon case.
             arr_col = "arr_timestamp" if "arr_timestamp" in df.columns else "timestamp"
             next_mask = (
                 (df[arr_col] >= current_end)
@@ -1268,19 +1262,19 @@ def create_temporal_graphs(
             weather_lookups=weather_lookups,
         )
 
-        # Máscara de nodos con actividad (para ignorar aeropuertos sin datos)
+        # Mask of nodes with activity (to ignore airports without data)
         active_mask = node_features.abs().sum(dim=1) > 0
 
-        # Concatenar features estáticas (3) + dinámicas (2) → [E, 5].
+        # Concatenate static (3) + dynamic (2) features → [E, 5].
         edge_attr_dynamic = compute_dynamic_edge_attr(
             edge_pairs, history_lookups, current_end, window_delta,
         )
         edge_attr = torch.cat([edge_attr_static, edge_attr_dynamic], dim=1)
 
-        # `timestamp` (ISO string) marca el inicio de la ventana de target
-        # — se usa para el split cronológico por fecha en
-        # `split_graphs_temporal`. Como string es compatible con el batching
-        # de PyG (no se concatena, solo se preserva por grafo).
+        # `timestamp` (ISO string) marks the start of the target window —
+        # used for the chronological date-based split in
+        # `split_graphs_temporal`. As a string it is compatible with PyG
+        # batching (not concatenated, just preserved per graph).
         graph = Data(
             x=node_features,
             edge_index=edge_index,
@@ -1295,8 +1289,8 @@ def create_temporal_graphs(
 
     horizons_str = str(prediction_horizons) if multi_horizon else "[1]"
     logger.info(
-        "Snapshots temporales creados: %d grafos (ventana=%dh, "
-        "horizontes=%s, umbral=%d min)",
+        "Temporal snapshots created: %d graphs (window=%dh, "
+        "horizons=%s, threshold=%d min)",
         len(graphs), window_hours, horizons_str, delay_threshold,
     )
 
@@ -1307,24 +1301,24 @@ def normalize_graph_features(
     graphs: list[Data],
     train_indices: list[int] | None = None,
 ) -> tuple[list[Data], dict[str, torch.Tensor]]:
-    """Normaliza las node features de los grafos (zero-mean, unit-variance).
+    """Normalize the graphs' node features (zero-mean, unit-variance).
 
-    Calcula media y desviación estándar solo sobre los nodos activos
-    de los grafos de entrenamiento, y aplica la normalización a todos
-    los grafos. Esto evita fuga de información del conjunto de test.
+    Computes mean and standard deviation only over the active nodes of the
+    training graphs, and applies the normalization to all graphs. This
+    avoids information leakage from the test set.
 
     Args:
-        graphs: Lista completa de grafos PyG.
-        train_indices: Índices de los grafos de entrenamiento para
-            calcular estadísticas. Si None, usa todos los grafos.
+        graphs: Full list of PyG graphs.
+        train_indices: Indices of the training graphs used to compute the
+            statistics. If None, uses all graphs.
 
     Returns:
-        Tupla de (grafos normalizados, estadísticas {mean, std}).
+        Tuple of (normalized graphs, statistics {mean, std}).
     """
     if not graphs:
         return graphs, {"mean": torch.zeros(1), "std": torch.ones(1)}
 
-    # Recopilar features de nodos activos para calcular estadísticas
+    # Collect active-node features to compute statistics
     train_idxs = train_indices if train_indices is not None else range(len(graphs))
     all_features = []
     for i in train_idxs:
@@ -1339,10 +1333,10 @@ def normalize_graph_features(
     stacked = torch.cat(all_features, dim=0)
     mean = stacked.mean(dim=0)
     std = stacked.std(dim=0)
-    # Evitar división por cero
+    # Avoid division by zero
     std = torch.clamp(std, min=1e-6)
 
-    # Aplicar normalización a todos los grafos
+    # Apply normalization to all graphs
     normalized = []
     for g in graphs:
         g_new = g.clone()
@@ -1350,31 +1344,31 @@ def normalize_graph_features(
         normalized.append(g_new)
 
     logger.info(
-        "Features normalizadas: media=%s, std=%s",
+        "Features normalized: mean=%s, std=%s",
         mean.numpy().round(2), std.numpy().round(2),
     )
 
     return normalized, {"mean": mean, "std": std}
 
 
-# Versión del esquema de features de grafo. Cualquier cambio en el contrato
-# de columnas de x/edge_attr/y debe incrementar este valor para invalidar
-# cachés en disco que asuman el esquema anterior.
-#   v2 → v3 (W2 multi-task): los targets multi-horizonte pasan de
-#         ``[N, H]`` a ``[N, H, 3]`` (canales arr_delay/dep_delay/pct_15).
-#   v3 → v4 (Weather): se añade el bloque H opcional con 9 + 9·H features
-#         meteorológicas (ver ``WEATHER_BLOCK_*``). Con ``weather.enabled
-#         = false`` el feature dim NO cambia, pero el hash de cache incluye
-#         el flag para que distintos toggles no se pisen.
+# Version of the graph feature schema. Any change to the x/edge_attr/y
+# column contract must increment this value to invalidate on-disk caches
+# that assume the previous schema.
+#   v2 → v3 (W2 multi-task): multi-horizon targets go from ``[N, H]`` to
+#         ``[N, H, 3]`` (channels arr_delay/dep_delay/pct_15).
+#   v3 → v4 (Weather): the optional block H is added with 9 + 9·H weather
+#         features (see ``WEATHER_BLOCK_*``). With ``weather.enabled =
+#         false`` the feature dim does NOT change, but the cache hash
+#         includes the flag so different toggles do not collide.
 GRAPH_SCHEMA_VERSION = 4
 
 
-# Mapeo de grupos legibles (en config.weather.params) a las claves
-# internas que reconoce ``WeatherLookups.enabled_params``. Mantener
-# sincronizado con el bloque ``weather:`` de configs/default.yaml.
+# Mapping of human-readable groups (in config.weather.params) to the
+# internal keys recognized by ``WeatherLookups.enabled_params``. Keep in
+# sync with the ``weather:`` block of configs/default.yaml.
 _WEATHER_PARAM_ALIASES = {
     "wind": "wind",
-    "wind_gust": "wind",          # alias retro-compatible
+    "wind_gust": "wind",          # backward-compatible alias
     "precip": "precip_cloud",
     "precip_cloud": "precip_cloud",
     "cloud": "precip_cloud",
@@ -1388,17 +1382,15 @@ def _load_weather_lookups_from_config(
     airports: list[str],
     config: dict,
 ) -> WeatherLookups | None:
-    """Lee config.weather y construye ``WeatherLookups`` si está activo.
+    """Read config.weather and build ``WeatherLookups`` if active.
 
-    Pasos:
-      1. Si ``weather.enabled`` es ``False`` (default) → ``None``.
-      2. Resuelve el rango temporal de ``df`` (fechas mínima y máxima de
-         ``FlightDate``). Open-Meteo es inclusivo en ``end_date`` → no
-         hace falta sumar un día.
-      3. Llama a ``load_weather_for_airports`` con el cache_dir
-         configurado (``weather.cache_dir`` o default
-         ``data/processed/weather``).
-      4. Construye ``WeatherLookups`` con los grupos de params activos.
+    Steps:
+      1. If ``weather.enabled`` is ``False`` (default) → ``None``.
+      2. Resolve the temporal range of ``df`` (min and max ``FlightDate``).
+         Open-Meteo is inclusive on ``end_date`` → no need to add a day.
+      3. Call ``load_weather_for_airports`` with the configured cache_dir
+         (``weather.cache_dir`` or the default ``data/processed/weather``).
+      4. Build ``WeatherLookups`` with the active param groups.
     """
     weather_config = (config.get("weather") or {})
     if not weather_config.get("enabled", False):
@@ -1406,8 +1398,8 @@ def _load_weather_lookups_from_config(
 
     flight_dates = pd.to_datetime(df["FlightDate"])
     start_date = flight_dates.min().date()
-    # Ampliamos un día por seguridad: las observaciones a T+h del último
-    # snapshot pueden caer en el día posterior si current_end es noche.
+    # Extend by a day for safety: the T+h observations of the last snapshot
+    # may fall on the following day if current_end is at night.
     end_date = flight_dates.max().date() + dt.timedelta(days=1)
 
     cache_dir_raw = weather_config.get("cache_dir") or "data/processed/weather"
@@ -1421,7 +1413,7 @@ def _load_weather_lookups_from_config(
     )
 
     logger.info(
-        "Meteorología activada (provider=%s, params=%s, %s..%s).",
+        "Weather enabled (provider=%s, params=%s, %s..%s).",
         weather_config.get("provider", "open_meteo"),
         sorted(enabled_params), start_date, end_date,
     )
@@ -1440,12 +1432,12 @@ def _snapshot_cache_key(
     airports: list[str],
     config: dict,
 ) -> str:
-    """Hash estable que identifica un build de snapshots.
+    """Stable hash that identifies a snapshot build.
 
-    Combina la versión del esquema, el subset de claves de config que
-    afectan al output, los aeropuertos y un resumen del DataFrame
-    (rango temporal, número de filas, columnas presentes). Si cualquiera
-    de estos elementos cambia, el hash cambia y el caché se invalida.
+    Combines the schema version, the subset of config keys that affect the
+    output, the airports and a summary of the DataFrame (temporal range,
+    row count, columns present). If any of these elements changes, the hash
+    changes and the cache is invalidated.
     """
     graph_config = config.get("graph", {}) or {}
     eval_config = config.get("evaluation", {}) or {}
@@ -1461,9 +1453,9 @@ def _snapshot_cache_key(
         )
     }
     relevant_eval = {"delay_threshold_minutes": eval_config.get("delay_threshold_minutes")}
-    # Subset estable de config.weather que afecta al tensor de features.
-    # ``provider`` se incluye para que un futuro switch a ASOS no reuse
-    # un caché generado con Open-Meteo.
+    # Stable subset of config.weather that affects the feature tensor.
+    # ``provider`` is included so a future switch to ASOS does not reuse a
+    # cache generated with Open-Meteo.
     relevant_weather = {
         "enabled": bool(weather_config.get("enabled", False)),
         "provider": weather_config.get("provider", "open_meteo"),
@@ -1496,24 +1488,24 @@ def build_graph_dataset(
     airports: list[str],
     config: dict,
 ) -> tuple[list[Data], dict[str, int], dict[str, torch.Tensor] | None]:
-    """Pipeline completo: de DataFrame a lista de grafos PyG.
+    """Full pipeline: from DataFrame to a list of PyG graphs.
 
-    Si ``config['graph']['cache_dir']`` apunta a un directorio, se usa
-    como caché de snapshots: el primer build escribe ``snapshots_<hash>.pt``
-    y los siguientes se cargan desde disco si la firma de entradas
-    (esquema + config + dataset + aeropuertos) no ha cambiado.
+    If ``config['graph']['cache_dir']`` points to a directory, it is used as
+    a snapshot cache: the first build writes ``snapshots_<hash>.pt`` and
+    subsequent ones load from disk if the input signature (schema + config +
+    dataset + airports) has not changed.
 
     Args:
-        df: DataFrame preprocesado (con FlightDate, Hour, Origin, Dest, etc.).
-        airports: Lista de códigos de aeropuerto filtrados.
-        config: Configuración con secciones 'graph' y 'evaluation'.
+        df: Preprocessed DataFrame (with FlightDate, Hour, Origin, Dest, etc.).
+        airports: List of filtered airport codes.
+        config: Configuration with 'graph' and 'evaluation' sections.
 
     Returns:
-        Tupla de (lista de grafos Data, mapeo de aeropuertos, estadísticas de
-        normalización {mean, std} o None si normalize_features=False).
-        Las estadísticas de normalización son necesarias en inferencia para
-        escalar los features de la misma forma que durante el entrenamiento;
-        guárdalas junto al checkpoint con ``torch.save(norm_stats, path)``.
+        Tuple of (list of Data graphs, airport map, normalization
+        statistics {mean, std} or None if normalize_features=False). The
+        normalization statistics are needed at inference time to scale the
+        features the same way as during training; save them alongside the
+        checkpoint with ``torch.save(norm_stats, path)``.
     """
     graph_config = config.get("graph", {})
     eval_config = config.get("evaluation", {})
@@ -1526,22 +1518,21 @@ def build_graph_dataset(
         if cache_path.exists():
             size_mb = cache_path.stat().st_size / (1024 * 1024)
             logger.info(
-                "Caché HIT: cargando snapshots desde %s (%.1f MB)",
+                "Cache HIT: loading snapshots from %s (%.1f MB)",
                 cache_path, size_mb,
             )
             payload = torch.load(cache_path, weights_only=False)
             return payload["graphs"], payload["airport_map"], payload.get("norm_stats")
         logger.info(
-            "Caché MISS: no existe %s. Generando snapshots y escribiendo "
-            "caché tras el build.",
+            "Cache MISS: %s does not exist. Generating snapshots and writing "
+            "the cache after the build.",
             cache_path,
         )
     else:
         logger.warning(
-            "Caché de snapshots DESACTIVADO (graph.cache_dir no está en el "
-            "config). Cada ejecución regenerará snapshots desde cero. Para "
-            "activarlo añade `graph.cache_dir: data/processed/snapshots` "
-            "al YAML."
+            "Snapshot cache DISABLED (graph.cache_dir is not in the config). "
+            "Every run will regenerate snapshots from scratch. To enable it, "
+            "add `graph.cache_dir: data/processed/snapshots` to the YAML."
         )
 
     airport_map = build_airport_mapping(airports)
@@ -1556,11 +1547,11 @@ def build_graph_dataset(
 
     prediction_horizons = graph_config.get("prediction_horizons")
 
-    # ── Meteorología (bloque H opcional) ─────────────────────────────
-    # Solo se activa si ``config.weather.enabled = true``. Si la red
-    # falla, ``load_weather_for_airports`` devuelve DataFrame vacío y
-    # ``_build_weather_lookups`` traduce a ``WeatherLookups`` vacío →
-    # el feature block H se llena con 0 sin romper el entrenamiento.
+    # ── Weather (optional block H) ───────────────────────────────────
+    # Only enabled if ``config.weather.enabled = true``. If the network
+    # fails, ``load_weather_for_airports`` returns an empty DataFrame and
+    # ``_build_weather_lookups`` translates it to an empty ``WeatherLookups``
+    # → feature block H is filled with 0 without breaking training.
     weather_lookups = _load_weather_lookups_from_config(
         df, airports, config,
     )
@@ -1577,9 +1568,9 @@ def build_graph_dataset(
         weather_lookups=weather_lookups,
     )
 
-    # Normalizar features usando solo estadísticas de entrenamiento.
-    # Las estadísticas se devuelven para persistirlas junto al checkpoint
-    # (necesarias para escalar features de la misma forma en inferencia).
+    # Normalize features using only training statistics. The statistics are
+    # returned so they can be persisted alongside the checkpoint (needed to
+    # scale features the same way at inference time).
     norm_stats: dict[str, torch.Tensor] | None = None
     normalize = graph_config.get("normalize_features", False)
     if normalize and graphs:
@@ -1599,7 +1590,7 @@ def build_graph_dataset(
             },
             cache_path,
         )
-        logger.info("Snapshots cacheados en: %s", cache_path)
+        logger.info("Snapshots cached at: %s", cache_path)
 
     return graphs, airport_map, norm_stats
 
@@ -1611,37 +1602,37 @@ def split_graphs_temporal(
     train_end: str | None = None,
     val_end: str | None = None,
 ) -> dict[str, list[Data]]:
-    """Divide los grafos temporales en train/val/test.
+    """Split the temporal graphs into train/val/test.
 
-    Soporta dos modos:
-    - **Por fecha** (preferido): si se pasan ``train_end`` y ``val_end``
-      como strings ISO (e.g. ``"2019-07-01"``), los grafos se agrupan por
-      su atributo ``timestamp``: ``< train_end`` → train; entre
-      ``train_end`` y ``val_end`` → val; ``≥ val_end`` → test. Funciona
-      correctamente con datasets que cubren varios años (cosa que el modo
-      por mes no hacía: jan-2018 y jan-2019 caían en el mismo bucket).
-    - **Por ratio** (fallback / retrocompatibilidad): si las fechas no
-      están dadas, se mantiene el corte secuencial por proporción.
+    Supports two modes:
+    - **By date** (preferred): if ``train_end`` and ``val_end`` are passed
+      as ISO strings (e.g. ``"2019-07-01"``), the graphs are grouped by
+      their ``timestamp`` attribute: ``< train_end`` → train; between
+      ``train_end`` and ``val_end`` → val; ``≥ val_end`` → test. Works
+      correctly with datasets spanning several years (which the by-month
+      mode did not: jan-2018 and jan-2019 fell into the same bucket).
+    - **By ratio** (fallback / backward compatibility): if the dates are
+      not given, the sequential proportional cut is kept.
 
     Args:
-        graphs: Lista de grafos PyG ordenados temporalmente.
-        train_ratio: Proporción de grafos para entrenamiento (modo ratio).
-        val_ratio: Proporción de grafos para validación (modo ratio).
-        train_end: Fecha ISO ``YYYY-MM-DD`` que cierra el split de train.
-        val_end: Fecha ISO ``YYYY-MM-DD`` que cierra el split de val.
+        graphs: List of temporally ordered PyG graphs.
+        train_ratio: Proportion of graphs for training (ratio mode).
+        val_ratio: Proportion of graphs for validation (ratio mode).
+        train_end: ISO date ``YYYY-MM-DD`` that closes the train split.
+        val_end: ISO date ``YYYY-MM-DD`` that closes the val split.
 
     Returns:
-        Diccionario con claves 'train', 'val', 'test'.
+        Dictionary with keys 'train', 'val', 'test'.
     """
     if train_end is not None and val_end is not None:
-        # Modo por fecha. Comparación lexicográfica sobre ISO strings es
-        # correcta porque el formato es ordenable.
+        # Date mode. Lexicographic comparison over ISO strings is correct
+        # because the format is sortable.
         train_split = [g for g in graphs if g.timestamp < train_end]
         val_split = [g for g in graphs if train_end <= g.timestamp < val_end]
         test_split = [g for g in graphs if g.timestamp >= val_end]
         splits = {"train": train_split, "val": val_split, "test": test_split}
         logger.info(
-            "Split por fecha: train < %s, val < %s, test ≥ %s",
+            "Date split: train < %s, val < %s, test ≥ %s",
             train_end, val_end, val_end,
         )
     else:
@@ -1654,13 +1645,13 @@ def split_graphs_temporal(
             "test": graphs[cut_val:],
         }
         logger.info(
-            "Split por ratio: train=%.0f%%, val=%.0f%%, test=%.0f%%",
+            "Ratio split: train=%.0f%%, val=%.0f%%, test=%.0f%%",
             train_ratio * 100, val_ratio * 100,
             (1 - train_ratio - val_ratio) * 100,
         )
 
     for name, split in splits.items():
-        logger.info("Graph split %s: %d grafos", name, len(split))
+        logger.info("Graph split %s: %d graphs", name, len(split))
 
     return splits
 
@@ -1669,30 +1660,28 @@ def create_temporal_sequences(
     graphs: list[Data],
     input_window: int = 6,
 ) -> list[list[Data]]:
-    """Agrupa grafos consecutivos en secuencias temporales para modelos LSTM.
+    """Group consecutive graphs into temporal sequences for LSTM models.
 
-    Crea ventanas deslizantes de tamaño ``input_window`` con paso 1 sobre
-    una lista de grafos ya pertenecientes a un mismo split (train, val o
-    test). El target de cada secuencia es ``sequence[-1].y`` (targets del
-    último grafo).
+    Creates sliding windows of size ``input_window`` with step 1 over a list
+    of graphs already belonging to the same split (train, val or test). Each
+    sequence's target is ``sequence[-1].y`` (targets of the last graph).
 
-    Debe llamarse DESPUÉS de ``split_graphs_temporal()`` sobre cada split
-    por separado para evitar fuga de información entre conjuntos.
+    Must be called AFTER ``split_graphs_temporal()`` on each split
+    separately to avoid information leakage between sets.
 
     Args:
-        graphs: Lista de grafos PyG de un solo split, ordenados
-            temporalmente.
-        input_window: Número de snapshots consecutivos por secuencia.
+        graphs: List of PyG graphs from a single split, temporally ordered.
+        input_window: Number of consecutive snapshots per sequence.
 
     Returns:
-        Lista de secuencias, donde cada secuencia es una lista de
-        ``input_window`` objetos Data. Vacía si hay menos grafos que
+        List of sequences, where each sequence is a list of
+        ``input_window`` Data objects. Empty if there are fewer graphs than
         ``input_window``.
     """
     if len(graphs) < input_window:
         logger.warning(
-            "Solo %d grafos disponibles, se necesitan %d para formar "
-            "secuencias. Retornando lista vacía.",
+            "Only %d graphs available, %d are needed to form sequences. "
+            "Returning an empty list.",
             len(graphs), input_window,
         )
         return []
@@ -1703,7 +1692,7 @@ def create_temporal_sequences(
     ]
 
     logger.info(
-        "Secuencias temporales creadas: %d secuencias (ventana=%d grafos)",
+        "Temporal sequences created: %d sequences (window=%d graphs)",
         len(sequences), input_window,
     )
 

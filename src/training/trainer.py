@@ -1,8 +1,8 @@
-"""Bucle de entrenamiento tabular reutilizable para modelos densos.
+"""Reusable tabular training loop for dense models.
 
-Wrapper fino sobre :class:`BaseTrainer` que solo conoce el contrato de
-DataLoader ``(features, targets)``. Toda la lógica de epochs, early
-stopping, checkpoint y scheduler vive en la clase base (W4.3).
+A thin wrapper over :class:`BaseTrainer` that only knows the DataLoader
+contract ``(features, targets)``. All the epoch, early-stopping,
+checkpoint and scheduler logic lives in the base class (W4.3).
 """
 
 from typing import Iterable
@@ -18,16 +18,16 @@ logger = setup_logger(__name__)
 
 
 class Trainer(BaseTrainer):
-    """Entrenador tabular para modelos densos (DenseNN, etc.).
+    """Tabular trainer for dense models (DenseNN, etc.).
 
     Args:
-        model: Modelo de PyTorch que acepta un único tensor de features.
-        optimizer: Optimizador.
-        criterion: Función de pérdida (se reutiliza también en validación,
-            comportamiento histórico).
-        device: Dispositivo (cpu/cuda).
-        scheduler: Learning rate scheduler (opcional).
-        gradient_clip: Valor máximo de gradiente (0 = sin clip).
+        model: PyTorch model that accepts a single feature tensor.
+        optimizer: Optimizer.
+        criterion: Loss function (also reused for validation, historical
+            behavior).
+        device: Device (cpu/cuda).
+        scheduler: Learning rate scheduler (optional).
+        gradient_clip: Maximum gradient value (0 = no clip).
     """
 
     def __init__(
@@ -52,14 +52,14 @@ class Trainer(BaseTrainer):
     def _forward_batch(
         self, batch: tuple[torch.Tensor, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, None]:
-        """Mueve un batch tabular al dispositivo y ejecuta el forward."""
+        """Move a tabular batch to the device and run the forward pass."""
         features, targets = batch
         features = features.to(self.device)
         targets = targets.to(self.device)
         predictions = self.model(features).squeeze(-1)
         return predictions, targets, None
 
-    # Wrappers para preservar la API pública histórica (train_loader/val_loader).
+    # Wrappers to preserve the historical public API (train_loader/val_loader).
 
     def fit(  # type: ignore[override]
         self,
@@ -70,7 +70,7 @@ class Trainer(BaseTrainer):
         checkpoint_path: str | None = None,
         model_name: str | None = None,
     ) -> dict[str, list[float]]:
-        """Entrena el modelo con DataLoaders tabulares."""
+        """Train the model with tabular DataLoaders."""
         return super().fit(
             train_data=train_loader,
             val_data=val_loader,

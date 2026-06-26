@@ -1,7 +1,8 @@
-"""Red neuronal densa (fully connected) como modelo baseline.
+"""Dense (fully connected) neural network as a baseline model.
 
-Arquitectura simple de capas lineales con dropout y activación configurable.
-Sirve como referencia para comparar con modelos más complejos (LSTM, GNN).
+A simple architecture of linear layers with dropout and a configurable
+activation. Serves as a reference for comparing against more complex models
+(LSTM, GNN).
 """
 
 import torch
@@ -9,16 +10,16 @@ import torch.nn as nn
 
 
 class DenseNN(nn.Module):
-    """Red neuronal fully connected para regresión de retrasos.
+    """Fully connected neural network for delay regression.
 
-    Arquitectura configurable con N capas ocultas, dropout y activación.
-    Predice el retraso de llegada (ArrDelay) en minutos.
+    Configurable architecture with N hidden layers, dropout and activation.
+    Predicts the arrival delay (ArrDelay) in minutes.
 
     Args:
-        input_dim: Número de features de entrada.
-        hidden_dims: Lista con dimensiones de capas ocultas (e.g., [256, 128, 64]).
-        dropout: Probabilidad de dropout entre capas.
-        activation: Función de activación ("relu" o "elu").
+        input_dim: Number of input features.
+        hidden_dims: List of hidden-layer dimensions (e.g., [256, 128, 64]).
+        dropout: Dropout probability between layers.
+        activation: Activation function ("relu" or "elu").
     """
 
     def __init__(
@@ -33,10 +34,10 @@ class DenseNN(nn.Module):
         if hidden_dims is None:
             hidden_dims = [256, 128, 64]
 
-        # Seleccionar función de activación
+        # Select activation function
         act_fn = nn.ReLU() if activation == "relu" else nn.ELU()
 
-        # Construir capas secuencialmente
+        # Build layers sequentially
         layers: list[nn.Module] = []
         prev_dim = input_dim
 
@@ -49,7 +50,7 @@ class DenseNN(nn.Module):
             ])
             prev_dim = hidden_dim
 
-        # Capa de salida: un valor (regresión)
+        # Output layer: a single value (regression)
         layers.append(nn.Linear(prev_dim, 1))
 
         self.network = nn.Sequential(*layers)
@@ -58,10 +59,10 @@ class DenseNN(nn.Module):
         """Forward pass.
 
         Args:
-            x: Tensor de entrada [batch_size, input_dim].
+            x: Input tensor [batch_size, input_dim].
 
         Returns:
-            Predicciones [batch_size, 1].
+            Predictions [batch_size, 1].
         """
         if x.size(0) == 1 and self.training:
             self.eval()

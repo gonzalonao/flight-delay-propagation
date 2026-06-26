@@ -1,19 +1,18 @@
-"""Métricas de evaluación unificadas para modelos de predicción de retrasos.
+"""Unified evaluation metrics for delay prediction models.
 
-Todos los modelos (tabulares y GNN) producen predicciones de regresión
-(retraso en minutos) y se evalúan con el mismo conjunto de métricas:
-- Regresión: MAE, RMSE, MAPE, R²
-- Clasificación derivada: Accuracy, Precision, Recall, F1
-  (aplicando un umbral sobre la predicción continua de ArrDelay)
+All models (tabular and GNN) produce regression predictions (delay in
+minutes) and are evaluated with the same set of metrics:
+- Regression: MAE, RMSE, MAPE, R²
+- Derived classification: Accuracy, Precision, Recall, F1
+  (applying a threshold over the continuous ArrDelay prediction)
 
-A partir de W2 los modelos multi-tarea (``output_channels=3``) producen
-también un canal de **logits** para ``pct_arr_delayed_15``. Cuando ese
-canal está presente, se computan métricas de clasificación adicionales
-con el prefijo ``bce_`` (``bce_accuracy``, ``bce_precision``, etc.) que
-salen directamente del head BCE (sigmoid + threshold 0.5). Las dos
-familias de métricas coexisten para permitir comparación apples-to-
-apples entre la decisión derivada del regresor y la del clasificador
-dedicado.
+From W2 onward, the multi-task models (``output_channels=3``) also produce
+a **logits** channel for ``pct_arr_delayed_15``. When that channel is
+present, additional classification metrics with the ``bce_`` prefix
+(``bce_accuracy``, ``bce_precision``, etc.) are computed directly from the
+BCE head (sigmoid + threshold 0.5). The two metric families coexist to
+allow an apples-to-apples comparison between the regressor-derived decision
+and that of the dedicated classifier.
 """
 
 import numpy as np
@@ -31,11 +30,11 @@ def compute_mae(predictions: np.ndarray, targets: np.ndarray) -> float:
     """Mean Absolute Error.
 
     Args:
-        predictions: Predicciones del modelo.
-        targets: Valores reales.
+        predictions: Model predictions.
+        targets: Ground-truth values.
 
     Returns:
-        MAE en las mismas unidades que los datos (minutos).
+        MAE in the same units as the data (minutes).
     """
     return float(np.mean(np.abs(predictions - targets)))
 
@@ -44,11 +43,11 @@ def compute_rmse(predictions: np.ndarray, targets: np.ndarray) -> float:
     """Root Mean Squared Error.
 
     Args:
-        predictions: Predicciones del modelo.
-        targets: Valores reales.
+        predictions: Model predictions.
+        targets: Ground-truth values.
 
     Returns:
-        RMSE en las mismas unidades que los datos (minutos).
+        RMSE in the same units as the data (minutes).
     """
     return float(np.sqrt(np.mean((predictions - targets) ** 2)))
 
@@ -58,33 +57,33 @@ def compute_mape(
 ) -> float:
     """Mean Absolute Percentage Error.
 
-    Usa epsilon para evitar división por cero en targets cercanos a 0.
+    Uses epsilon to avoid division by zero for targets near 0.
 
     Args:
-        predictions: Predicciones del modelo.
-        targets: Valores reales.
-        epsilon: Valor mínimo del denominador.
+        predictions: Model predictions.
+        targets: Ground-truth values.
+        epsilon: Minimum denominator value.
 
     Returns:
-        MAPE como porcentaje (0-100+).
+        MAPE as a percentage (0-100+).
     """
     denominator = np.maximum(np.abs(targets), epsilon)
     return float(np.mean(np.abs(predictions - targets) / denominator) * 100)
 
 
 def compute_r2(predictions: np.ndarray, targets: np.ndarray) -> float:
-    """Coeficiente de determinación R².
+    """Coefficient of determination R².
 
-    R² = 1 significa predicción perfecta.
-    R² = 0 significa que el modelo es igual de bueno que predecir la media.
-    R² < 0 significa que el modelo es peor que predecir la media.
+    R² = 1 means perfect prediction.
+    R² = 0 means the model is as good as predicting the mean.
+    R² < 0 means the model is worse than predicting the mean.
 
     Args:
-        predictions: Predicciones del modelo.
-        targets: Valores reales.
+        predictions: Model predictions.
+        targets: Ground-truth values.
 
     Returns:
-        Valor R².
+        R² value.
     """
     ss_res = np.sum((targets - predictions) ** 2)
     ss_tot = np.sum((targets - np.mean(targets)) ** 2)
@@ -96,14 +95,14 @@ def compute_r2(predictions: np.ndarray, targets: np.ndarray) -> float:
 def compute_all_metrics(
     predictions: np.ndarray, targets: np.ndarray
 ) -> dict[str, float]:
-    """Calcula todas las métricas de regresión.
+    """Compute all regression metrics.
 
     Args:
-        predictions: Predicciones del modelo.
-        targets: Valores reales.
+        predictions: Model predictions.
+        targets: Ground-truth values.
 
     Returns:
-        Diccionario con mae, rmse, mape, r2.
+        Dictionary with mae, rmse, mape, r2.
     """
     return {
         "mae": compute_mae(predictions, targets),
@@ -116,18 +115,18 @@ def compute_all_metrics(
 def compute_classification_metrics(
     predictions: np.ndarray, targets: np.ndarray, threshold: float = 15.0
 ) -> dict[str, float]:
-    """Calcula métricas de clasificación binaria derivadas de regresión.
+    """Compute binary classification metrics derived from regression.
 
-    Convierte predicciones y targets continuos (minutos de retraso)
-    a clases binarias usando un umbral de retraso.
+    Converts continuous predictions and targets (delay minutes) to binary
+    classes using a delay threshold.
 
     Args:
-        predictions: Predicciones continuas (minutos de retraso).
-        targets: Valores reales continuos (minutos de retraso).
-        threshold: Umbral en minutos para considerar "retrasado".
+        predictions: Continuous predictions (delay minutes).
+        targets: Continuous ground-truth values (delay minutes).
+        threshold: Threshold in minutes to consider "delayed".
 
     Returns:
-        Diccionario con accuracy, precision, recall, f1.
+        Dictionary with accuracy, precision, recall, f1.
     """
     pred_labels = (predictions >= threshold).astype(int)
     target_labels = (targets >= threshold).astype(int)
@@ -156,25 +155,25 @@ def compute_bce_classification_metrics(
     bce_threshold: float = 0.5,
     target_threshold: float = 0.5,
 ) -> dict[str, float]:
-    """Métricas de clasificación binaria derivadas del head BCE de W2.
+    """Binary classification metrics derived from the W2 BCE head.
 
-    El modelo emite ``logits`` para ``pct_arr_delayed_15`` (logit ∈ ℝ);
-    aplicamos sigmoid y comparamos con ``bce_threshold`` (0.5 por
-    defecto) para obtener la etiqueta predicha. El target es la
-    fracción real de vuelos delayed en la ventana ∈ [0, 1]; se binariza
-    contra ``target_threshold`` (por defecto 0.5 — "más de la mitad
-    delayed" cuenta como ventana retrasada). Bajar ``bce_threshold``
-    es la palanca natural para subir recall a cambio de precision.
+    The model emits ``logits`` for ``pct_arr_delayed_15`` (logit ∈ ℝ); we
+    apply sigmoid and compare against ``bce_threshold`` (0.5 by default) to
+    obtain the predicted label. The target is the real fraction of delayed
+    flights in the window ∈ [0, 1]; it is binarized against
+    ``target_threshold`` (0.5 by default — "more than half delayed" counts
+    as a delayed window). Lowering ``bce_threshold`` is the natural lever
+    to raise recall at the expense of precision.
 
     Args:
-        pct_logits: Logits ``[N]`` del canal pct (pre-sigmoid).
-        pct_targets: Targets ``[N]`` ∈ [0, 1] del mismo canal.
-        bce_threshold: Probabilidad mínima para predecir "delayed".
-        target_threshold: Fracción mínima del target que cuenta como
-            etiqueta positiva.
+        pct_logits: Logits ``[N]`` of the pct channel (pre-sigmoid).
+        pct_targets: Targets ``[N]`` ∈ [0, 1] of the same channel.
+        bce_threshold: Minimum probability to predict "delayed".
+        target_threshold: Minimum target fraction that counts as a positive
+            label.
 
     Returns:
-        Dict con ``bce_accuracy``, ``bce_precision``, ``bce_recall``,
+        Dict with ``bce_accuracy``, ``bce_precision``, ``bce_recall``,
         ``bce_f1``.
     """
     probs = 1.0 / (1.0 + np.exp(-pct_logits))
@@ -206,28 +205,28 @@ def compute_unified_metrics(
     pct_logits: np.ndarray | None = None,
     pct_targets: np.ndarray | None = None,
 ) -> dict[str, float]:
-    """Calcula métricas unificadas: regresión + clasificación derivada.
+    """Compute unified metrics: regression + derived classification.
 
-    Función estándar para evaluar todos los modelos del proyecto.
-    Combina métricas de regresión (MAE, RMSE, MAPE, R²) con métricas
-    de clasificación (Accuracy, Precision, Recall, F1) derivadas
-    de aplicar un umbral de retraso a las predicciones continuas.
+    Standard function for evaluating all of the project's models. Combines
+    regression metrics (MAE, RMSE, MAPE, R²) with classification metrics
+    (Accuracy, Precision, Recall, F1) derived from applying a delay
+    threshold to the continuous predictions.
 
-    Si se pasan ``pct_logits`` y ``pct_targets`` (ruta multi-tarea de
-    W2), se añaden además las métricas ``bce_*`` del head BCE
-    dedicado, permitiendo comparar la decisión thresholded-from-
-    regression con la del clasificador entrenado explícitamente.
+    If ``pct_logits`` and ``pct_targets`` are passed (W2 multi-task path),
+    the ``bce_*`` metrics from the dedicated BCE head are also added,
+    allowing comparison of the thresholded-from-regression decision with
+    that of the explicitly trained classifier.
 
     Args:
-        predictions: Predicciones continuas de ArrDelay (minutos).
-        targets: Valores reales de ArrDelay (minutos).
-        delay_threshold: Umbral en minutos para clasificación derivada.
-        pct_logits: Logits del canal pct_arr_delayed (opcional).
-        pct_targets: Targets ∈ [0, 1] del canal pct (opcional).
+        predictions: Continuous ArrDelay predictions (minutes).
+        targets: Ground-truth ArrDelay values (minutes).
+        delay_threshold: Threshold in minutes for the derived classification.
+        pct_logits: Logits of the pct_arr_delayed channel (optional).
+        pct_targets: Targets ∈ [0, 1] of the pct channel (optional).
 
     Returns:
-        Diccionario con todas las métricas. Si los args ``pct_*`` están
-        presentes incluye también ``bce_accuracy/precision/recall/f1``.
+        Dictionary with all metrics. If the ``pct_*`` args are present it
+        also includes ``bce_accuracy/precision/recall/f1``.
     """
     regression = compute_all_metrics(predictions, targets)
     classification = compute_classification_metrics(
@@ -251,27 +250,27 @@ def evaluate_multi_horizon_graph_model(
     prediction_horizons: list[int],
     delay_threshold: float = 15.0,
 ) -> dict[str, dict[str, float]]:
-    """Evalúa un modelo GNN multi-horizonte sobre grafos temporales.
+    """Evaluate a multi-horizon GNN model over temporal graphs.
 
-    Calcula métricas unificadas para cada horizonte de predicción
-    y un promedio global.
+    Computes unified metrics for each prediction horizon and a global
+    average.
 
     Args:
-        model: Modelo GNN multi-horizonte en modo eval.
-        graphs: Lista de grafos PyG con targets [num_nodes, num_horizons].
-        device: Dispositivo (cpu/cuda).
-        prediction_horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
-        delay_threshold: Umbral en minutos para clasificación derivada.
+        model: Multi-horizon GNN model in eval mode.
+        graphs: List of PyG graphs with targets [num_nodes, num_horizons].
+        device: Device (cpu/cuda).
+        prediction_horizons: List of horizons (e.g., [1, 2, 3, 4, 5]).
+        delay_threshold: Threshold in minutes for the derived classification.
 
     Returns:
-        Diccionario con métricas por horizonte y promedio:
+        Dictionary with per-horizon metrics and the average:
         {"horizon_1h": {...}, "horizon_2h": {...}, ..., "average": {...}}
     """
     model.eval()
     num_horizons = len(prediction_horizons)
 
-    # Acumular predicciones y targets por horizonte. ``pct_*`` sólo se
-    # popula si el modelo emite el tercer canal (multi-tarea W2).
+    # Accumulate predictions and targets per horizon. ``pct_*`` is only
+    # populated if the model emits the third channel (W2 multi-task).
     all_preds: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
     all_targets: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
     all_pct_logits: list[list[np.ndarray]] = [[] for _ in range(num_horizons)]
@@ -286,14 +285,14 @@ def evaluate_multi_horizon_graph_model(
         )
         mask = graph.active_mask
 
-        # Salida [num_nodes, num_horizons] o [num_nodes, num_horizons, C]
+        # Output [num_nodes, num_horizons] or [num_nodes, num_horizons, C]
         preds = model(x, edge_index, edge_attr=edge_attr).cpu().numpy()
         targets_np = graph.y.numpy()
         mask_np = mask.numpy()
 
-        # Detecta si el modelo emite el head pct (canal 2). Asumimos que
-        # si la última dim coincide con NUM_TARGET_CHANNELS estamos en
-        # multi-task; las dimensiones se ramifican aquí, no en el modelo.
+        # Detect whether the model emits the pct head (channel 2). We assume
+        # that if the last dim matches NUM_TARGET_CHANNELS we are in
+        # multi-task; the dimensions branch here, not in the model.
         pred_has_channels = preds.ndim == 3
         target_has_channels = targets_np.ndim == 3
 
@@ -332,7 +331,7 @@ def evaluate_multi_horizon_graph_model(
         result["average"] = empty.copy()
         return result
 
-    # Calcular métricas por horizonte
+    # Compute per-horizon metrics
     result: dict[str, dict[str, float]] = {}
     all_metrics_for_avg: list[dict[str, float]] = []
 
@@ -353,7 +352,7 @@ def evaluate_multi_horizon_graph_model(
         result[f"horizon_{h}h"] = metrics_h
         all_metrics_for_avg.append(metrics_h)
 
-    # Promedio de métricas
+    # Average of the metrics
     avg_metrics: dict[str, float] = {}
     for key in all_metrics_for_avg[0]:
         avg_metrics[key] = float(
@@ -372,21 +371,21 @@ def evaluate_multi_horizon_sequence_model(
     prediction_horizons: list[int],
     delay_threshold: float = 15.0,
 ) -> dict[str, dict[str, float]]:
-    """Evalúa un modelo de secuencias multi-horizonte (SpatioTemporalGNN).
+    """Evaluate a multi-horizon sequence model (SpatioTemporalGNN).
 
-    Igual que ``evaluate_multi_horizon_graph_model`` pero opera sobre
-    secuencias de grafos en vez de grafos individuales. Los targets y la
-    máscara se toman del último grafo de cada secuencia.
+    Same as ``evaluate_multi_horizon_graph_model`` but operates over
+    sequences of graphs instead of individual graphs. The targets and mask
+    are taken from the last graph of each sequence.
 
     Args:
-        model: Modelo que acepta ``list[Data]`` (ya en device).
-        sequences: Lista de secuencias, cada una es ``list[Data]``.
-        device: Dispositivo (cpu/cuda).
-        prediction_horizons: Lista de horizontes (e.g., [1, 2, 3, 4, 5]).
-        delay_threshold: Umbral en minutos para clasificación derivada.
+        model: Model that accepts ``list[Data]`` (already on device).
+        sequences: List of sequences, each one a ``list[Data]``.
+        device: Device (cpu/cuda).
+        prediction_horizons: List of horizons (e.g., [1, 2, 3, 4, 5]).
+        delay_threshold: Threshold in minutes for the derived classification.
 
     Returns:
-        Diccionario con métricas por horizonte y promedio:
+        Dictionary with per-horizon metrics and the average:
         {"horizon_1h": {...}, ..., "average": {...}}
     """
     model.eval()
@@ -494,19 +493,19 @@ def evaluate_graph_model(
     device: torch.device,
     delay_threshold: float = 15.0,
 ) -> dict[str, float]:
-    """Evalúa un modelo GNN sobre una lista de grafos temporales.
+    """Evaluate a GNN model over a list of temporal graphs.
 
-    El modelo produce predicciones continuas (minutos de retraso)
-    y se evalúa con métricas unificadas de regresión + clasificación.
+    The model produces continuous predictions (delay minutes) and is
+    evaluated with unified regression + classification metrics.
 
     Args:
-        model: Modelo GNN en modo eval.
-        graphs: Lista de grafos PyG con active_mask.
-        device: Dispositivo (cpu/cuda).
-        delay_threshold: Umbral en minutos para clasificación derivada.
+        model: GNN model in eval mode.
+        graphs: List of PyG graphs with active_mask.
+        device: Device (cpu/cuda).
+        delay_threshold: Threshold in minutes for the derived classification.
 
     Returns:
-        Diccionario con métricas unificadas (regresión + clasificación).
+        Dictionary with unified metrics (regression + classification).
     """
     model.eval()
     all_predictions = []
@@ -520,7 +519,7 @@ def evaluate_graph_model(
         )
         mask = graph.active_mask
 
-        # Salida directa del modelo (regresión, sin sigmoid)
+        # Direct model output (regression, no sigmoid)
         preds = model(x, edge_index, edge_attr=edge_attr).squeeze(-1)
         preds = preds.cpu().numpy()
 
@@ -546,18 +545,18 @@ def evaluate_model(
     device: torch.device,
     delay_threshold: float = 15.0,
 ) -> dict[str, float]:
-    """Evalúa un modelo tabular sobre un dataloader completo.
+    """Evaluate a tabular model over a full dataloader.
 
-    Calcula métricas unificadas de regresión + clasificación derivada.
+    Computes unified regression + derived-classification metrics.
 
     Args:
-        model: Modelo de PyTorch en modo eval.
-        dataloader: DataLoader con datos de test.
-        device: Dispositivo (cpu/cuda).
-        delay_threshold: Umbral en minutos para clasificación derivada.
+        model: PyTorch model in eval mode.
+        dataloader: DataLoader with test data.
+        device: Device (cpu/cuda).
+        delay_threshold: Threshold in minutes for the derived classification.
 
     Returns:
-        Diccionario con métricas unificadas (regresión + clasificación).
+        Dictionary with unified metrics (regression + classification).
     """
     model.eval()
     all_predictions = []

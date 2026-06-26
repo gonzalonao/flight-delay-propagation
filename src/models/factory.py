@@ -1,18 +1,18 @@
-"""Fábrica única de modelos + registries compartidos.
+"""Single model factory + shared registries.
 
-Antes de este módulo, ``scripts/train.py`` y ``scripts/evaluate.py``
-duplicaban la función ``build_model`` y los conjuntos de constantes
+Before this module, ``scripts/train.py`` and ``scripts/evaluate.py``
+duplicated the ``build_model`` function and the constant sets
 (``MODEL_REGISTRY``, ``GRAPH_MODELS``, ``MULTI_HORIZON_MODELS``,
-``SEQUENCE_MODELS``). La duplicación contribuyó a errores reales —
-por ejemplo, la versión de ``evaluate.py`` no propagaba ``activation``
-a ``DenseNN``. Centralizando aquí evitamos la divergencia.
+``SEQUENCE_MODELS``). The duplication contributed to real bugs — for
+example, the ``evaluate.py`` version did not propagate ``activation`` to
+``DenseNN``. Centralizing here avoids the divergence.
 
-Convenciones:
-    - Las claves de modelo son strings minúsculas (``"dense_nn"``,
-      ``"basic_gcn"``, ``"multi_horizon_gat"``, ``"spatiotemporal_gnn"``,
+Conventions:
+    - Model keys are lowercase strings (``"dense_nn"``, ``"basic_gcn"``,
+      ``"multi_horizon_gat"``, ``"spatiotemporal_gnn"``,
       ``"seq2seq_gnn"``).
-    - ``build_model(config, input_dim, edge_dim=None)`` es el único
-      camino soportado para instanciar modelos desde config.
+    - ``build_model(config, input_dim, edge_dim=None)`` is the only
+      supported path for instantiating models from config.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from src.models.multi_horizon_gat import MultiHorizonGAT
 from src.models.seq2seq_gnn import Seq2SeqGNN
 from src.models.spatiotemporal_gnn import SpatioTemporalGNN
 
-# Registro completo de modelos por nombre lógico → clase.
+# Full registry of models by logical name → class.
 MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "dense_nn": DenseNN,
     "basic_gcn": BasicGCN,
@@ -34,17 +34,17 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "seq2seq_gnn": Seq2SeqGNN,
 }
 
-# Modelos que reciben grafos PyG (en vez de tensores tabulares).
+# Models that receive PyG graphs (instead of tabular tensors).
 GRAPH_MODELS: set[str] = {
     "basic_gcn", "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
 }
 
-# Modelos que producen un tensor de targets por horizonte (multi-horizon).
+# Models that produce a per-horizon target tensor (multi-horizon).
 MULTI_HORIZON_MODELS: set[str] = {
     "multi_horizon_gat", "spatiotemporal_gnn", "seq2seq_gnn",
 }
 
-# Modelos que procesan secuencias de snapshots (no un único snapshot).
+# Models that process sequences of snapshots (not a single snapshot).
 SEQUENCE_MODELS: set[str] = {"spatiotemporal_gnn", "seq2seq_gnn"}
 
 
@@ -53,21 +53,21 @@ def build_model(
     input_dim: int,
     edge_dim: int | None = None,
 ) -> nn.Module:
-    """Instancia un modelo a partir de la configuración completa.
+    """Instantiate a model from the full configuration.
 
     Args:
-        config: Diccionario completo de config (con secciones ``model``,
-            ``graph``, etc.).
-        input_dim: Número de features por nodo (o por muestra tabular).
-        edge_dim: Dimensión de ``edge_attr`` para capas que la soporten
-            (``GATv2Conv``). Pasa ``None`` para tabulares o ``BasicGCN``,
-            donde se ignora.
+        config: Full config dictionary (with ``model``, ``graph``, etc.
+            sections).
+        input_dim: Number of features per node (or per tabular sample).
+        edge_dim: Dimension of ``edge_attr`` for layers that support it
+            (``GATv2Conv``). Pass ``None`` for tabular models or
+            ``BasicGCN``, where it is ignored.
 
     Returns:
-        Instancia ``nn.Module`` lista para mover a dispositivo.
+        An ``nn.Module`` instance ready to be moved to a device.
 
     Raises:
-        ValueError: Si ``config['model']['name']`` no está en
+        ValueError: If ``config['model']['name']`` is not in
             ``MODEL_REGISTRY``.
     """
     model_name = config["model"]["name"]
@@ -93,10 +93,10 @@ def build_model(
         "prediction_horizons", [1, 2, 4, 6, 8],
     )
 
-    # Multi-task (W2): activamos los 3 canales de salida del modelo
-    # cuando ``training.loss == "multi_task"``. Vivir en el factory
-    # mantiene la decisión en un único sitio — el config dice qué
-    # entrenar y la fábrica configura el modelo en consecuencia.
+    # Multi-task (W2): we enable the model's 3 output channels when
+    # ``training.loss == "multi_task"``. Living in the factory keeps the
+    # decision in a single place — the config says what to train and the
+    # factory configures the model accordingly.
     output_channels = _resolve_output_channels(config, model_name)
 
     if model_name == "multi_horizon_gat":
@@ -125,13 +125,13 @@ def build_model(
         )
 
     if model_name == "seq2seq_gnn":
-        # Backward compat: el modelo se redefinió en W3 (Spatio-Temporal
-        # Transformer + horizon-query decoder). Las claves nuevas son
+        # Backward compat: the model was redefined in W3 (Spatio-Temporal
+        # Transformer + horizon-query decoder). The new keys are
         # ``hidden_dim`` / ``num_spatial_layers`` / ``num_temporal_layers``.
-        # Si el config aún trae las antiguas (``gnn_hidden`` /
-        # ``num_gnn_layers``) las usamos como fallback. ``lstm_hidden`` no
-        # tiene equivalente — el nuevo modelo no usa LSTM — y se ignora
-        # silenciosamente para no romper configs heredados.
+        # If the config still carries the old ones (``gnn_hidden`` /
+        # ``num_gnn_layers``) we use them as a fallback. ``lstm_hidden`` has
+        # no equivalent — the new model uses no LSTM — and is silently
+        # ignored so legacy configs do not break.
         hidden_dim = model_config.get(
             "hidden_dim", model_config.get("gnn_hidden", 128),
         )
@@ -152,26 +152,25 @@ def build_model(
         )
 
     raise ValueError(
-        f"Modelo no reconocido: '{model_name}'. "
-        f"Disponibles: {sorted(MODEL_REGISTRY.keys())}"
+        f"Unrecognized model: '{model_name}'. "
+        f"Available: {sorted(MODEL_REGISTRY.keys())}"
     )
 
 
-# Número de canales del head multi-tarea de W2 — tres tareas: arr_delay
-# (regresión primaria), dep_delay (regresión auxiliar) y pct_arr_delayed_15
-# (clasificación). Coincide con ``NUM_TARGET_CHANNELS`` en graph_builder
-# pero lo redeclaramos aquí para no introducir un import circular del
-# data layer en el factory.
+# Number of channels in the W2 multi-task head — three tasks: arr_delay
+# (primary regression), dep_delay (auxiliary regression) and
+# pct_arr_delayed_15 (classification). Matches ``NUM_TARGET_CHANNELS`` in
+# graph_builder but is re-declared here to avoid introducing a circular
+# import of the data layer into the factory.
 _MULTI_TASK_OUTPUT_CHANNELS = 3
 
 
 def _resolve_output_channels(config: dict, model_name: str) -> int:
-    """Determina ``output_channels`` para los modelos multi-horizonte.
+    """Determine ``output_channels`` for the multi-horizon models.
 
-    Devuelve 3 si y sólo si el modelo es multi-horizonte y la pérdida
-    configurada es ``"multi_task"`` (única forma soportada de consumir
-    el tercer canal). Para cualquier otro caso devuelve 1 (output
-    histórico ``[N, H]``).
+    Returns 3 if and only if the model is multi-horizon and the configured
+    loss is ``"multi_task"`` (the only supported way to consume the third
+    channel). In any other case it returns 1 (historical ``[N, H]`` output).
     """
     if model_name not in MULTI_HORIZON_MODELS:
         return 1

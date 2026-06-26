@@ -1,47 +1,46 @@
-"""Fetcher de datos meteorológicos para Open-Meteo Historical (ERA5).
+"""Weather data fetcher for Open-Meteo Historical (ERA5).
 
-Provee observaciones horarias de tiempo para cada aeropuerto (identificado
-por IATA) en el rango temporal del dataset. Las columnas resultantes se
-inyectan como features exógenas en el constructor de grafos
+Provides hourly weather observations for each airport (identified by IATA)
+over the dataset's temporal range. The resulting columns are injected as
+exogenous features in the graph builder
 (``graph_builder.compute_node_features_rich``).
 
-Fuente
+Source
 ------
-Open-Meteo Historical Weather API (Reanalysis ERA5):
+Open-Meteo Historical Weather API (ERA5 reanalysis):
     https://archive-api.open-meteo.com/v1/archive
 
-- Gratuita, sin API key.
-- Reanalysis ERA5 sobre cuadrícula ~25 km — cobertura uniforme para los 70
-  aeropuertos del proyecto (a diferencia de Meteostat, que depende de
-  estaciones METAR/ASOS y sufre huecos en hubs secundarios).
-- Endpoint forecast con el mismo esquema → simetría train/serve futura.
+- Free, no API key.
+- ERA5 reanalysis on a ~25 km grid — uniform coverage for the project's 70
+  airports (unlike Meteostat, which depends on METAR/ASOS stations and
+  suffers gaps at secondary hubs).
+- Forecast endpoint with the same schema → future train/serve symmetry.
 
-Esquema canónico
-----------------
-Por cada aeropuerto y hora natural devolvemos las siguientes columnas:
+Canonical schema
+-----------------
+For each airport and clock hour we return the following columns:
 
-  wind_speed_10m   km/h  velocidad media del viento a 10 m
-  wind_gusts_10m   km/h  ráfaga máxima a 10 m
-  precipitation    mm    lluvia + nieve líquida equivalente
-  cloud_cover      %     cobertura nubosa
-  weather_code     int   código WMO (ver ``bucket_wmo_code``)
-  weather_category int   bucket compacto 0..4 (ver ``bucket_wmo_code``)
+  wind_speed_10m   km/h  mean wind speed at 10 m
+  wind_gusts_10m   km/h  max gust at 10 m
+  precipitation    mm    rain + liquid-equivalent snow
+  cloud_cover      %     cloud cover
+  weather_code     int   WMO code (see ``bucket_wmo_code``)
+  weather_category int   compact bucket 0..4 (see ``bucket_wmo_code``)
 
-Caché
+Cache
 -----
-``data/processed/weather/open_meteo/{iata}_{start}_{end}.parquet`` indexado
-por la marca temporal horaria. La caché es por aeropuerto y rango
-solicitado: si el rango cambia, el fichero cambia. La invariante de
-leakage NO depende de esta caché — el corte temporal se hace en
-``graph_builder``, no aquí.
+``data/processed/weather/open_meteo/{iata}_{start}_{end}.parquet`` indexed
+by the hourly timestamp. The cache is per airport and requested range: if
+the range changes, the file changes. The leakage invariant does NOT depend
+on this cache — the temporal cut is done in ``graph_builder``, not here.
 
-Política ante fallos
---------------------
-``load_weather_for_airports`` registra un warning y omite el aeropuerto
-si su coordenada no figura en ``airport_coords.csv`` o si Open-Meteo
-devuelve un error HTTP. El builder de features rellena los huecos con
-0.0, así que el entrenamiento NO se rompe: degrada a "este aeropuerto no
-tiene señal meteorológica" sin propagar la excepción.
+Failure policy
+--------------
+``load_weather_for_airports`` logs a warning and skips an airport if its
+coordinate is missing from ``airport_coords.csv`` or if Open-Meteo returns
+an HTTP error. The feature builder fills the gaps with 0.0, so training
+does NOT break: it degrades to "this airport has no weather signal" without
+propagating the exception.
 """
 
 from __future__ import annotations
@@ -66,24 +65,24 @@ logger = setup_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Proxy pool (opcional, para sortear rate-limits 429 de Open-Meteo).
+# Proxy pool (optional, to work around Open-Meteo 429 rate-limits).
 #
-# Activación: definir una de estas dos variables de entorno
+# Activation: define one of these two environment variables
 #
-#   OPEN_METEO_PROXY_URL   URL al endpoint de Webshare (u otro provider)
-#                          que devuelve la lista de proxies en formato
-#                          "host:port:user:pass" — una línea por proxy.
-#   OPEN_METEO_PROXY_FILE  Ruta local a un .txt con el mismo formato.
+#   OPEN_METEO_PROXY_URL   URL to the Webshare (or other provider) endpoint
+#                          that returns the proxy list in
+#                          "host:port:user:pass" format — one line per proxy.
+#   OPEN_METEO_PROXY_FILE  Local path to a .txt with the same format.
 #
-# Si ambas están definidas, OPEN_METEO_PROXY_URL gana. El pool se carga
-# una sola vez (lazy + memoized) en la primera llamada que lo necesite.
-# Si no está definida ninguna, el módulo se comporta como antes (HTTP
-# directo, sin retries) y los tests siguen pasando sin cambios.
+# If both are defined, OPEN_METEO_PROXY_URL wins. The pool is loaded only
+# once (lazy + memoized) on the first call that needs it. If neither is
+# defined, the module behaves as before (direct HTTP, no retries) and the
+# tests keep passing unchanged.
 # ---------------------------------------------------------------------------
 
-# Máximo de proxies a probar tras un 429/URLError antes de rendirse.
-# 5 es suficiente: en el plan gratuito de Webshare los proxies rotan IP
-# por petición, y los 100 proxies entregados raramente caen en bloque.
+# Maximum number of proxies to try after a 429/URLError before giving up.
+# 5 is enough: on Webshare's free plan the proxies rotate IP per request,
+# and the 100 delivered proxies rarely go down as a block.
 _MAX_PROXY_RETRIES = 5
 
 _PROXY_POOL: list[str] | None = None
@@ -91,12 +90,12 @@ _PROXY_POOL_LOADED = False
 
 
 def _load_proxy_pool() -> list[str]:
-    """Devuelve la lista de proxies (lazy + memoized).
+    """Return the list of proxies (lazy + memoized).
 
-    Lee ``OPEN_METEO_PROXY_URL`` o ``OPEN_METEO_PROXY_FILE``. Cada línea
-    válida debe ser ``host:port:user:pass`` (auth básica) o ``host:port``
-    (sin auth). El resultado se baraja una vez para no martillear siempre
-    al primer proxy.
+    Reads ``OPEN_METEO_PROXY_URL`` or ``OPEN_METEO_PROXY_FILE``. Each valid
+    line must be ``host:port:user:pass`` (basic auth) or ``host:port`` (no
+    auth). The result is shuffled once so we do not always hammer the first
+    proxy.
     """
     global _PROXY_POOL, _PROXY_POOL_LOADED
     if _PROXY_POOL_LOADED:
@@ -114,20 +113,20 @@ def _load_proxy_pool() -> list[str]:
             )
             with urllib.request.urlopen(req, timeout=30) as response:
                 text = response.read().decode("utf-8")
-            logger.info("Proxy pool descargado desde OPEN_METEO_PROXY_URL.")
-        except Exception as exc:  # pragma: no cover - depende de la red
+            logger.info("Proxy pool downloaded from OPEN_METEO_PROXY_URL.")
+        except Exception as exc:  # pragma: no cover - network-dependent
             logger.warning(
-                "OPEN_METEO_PROXY_URL definido pero la descarga falló: %s. "
-                "Continúo sin proxies (peticiones directas).", exc,
+                "OPEN_METEO_PROXY_URL defined but the download failed: %s. "
+                "Continuing without proxies (direct requests).", exc,
             )
     elif path:
         try:
             text = Path(path).read_text(encoding="utf-8")
-            logger.info("Proxy pool cargado desde OPEN_METEO_PROXY_FILE: %s", path)
-        except Exception as exc:  # pragma: no cover - depende del FS
+            logger.info("Proxy pool loaded from OPEN_METEO_PROXY_FILE: %s", path)
+        except Exception as exc:  # pragma: no cover - FS-dependent
             logger.warning(
-                "OPEN_METEO_PROXY_FILE definido (%s) pero la lectura falló: %s. "
-                "Continúo sin proxies.", path, exc,
+                "OPEN_METEO_PROXY_FILE defined (%s) but the read failed: %s. "
+                "Continuing without proxies.", path, exc,
             )
 
     if not text:
@@ -146,31 +145,30 @@ def _load_proxy_pool() -> list[str]:
         elif len(parts) == 2:
             host, port = parts
             pool.append(f"http://{host}:{port}")
-        # Otros formatos se ignoran silenciosamente (líneas comentadas,
-        # cabeceras, etc.).
+        # Other formats are silently ignored (commented lines, headers, etc.).
 
     random.shuffle(pool)
     _PROXY_POOL = pool
     if pool:
-        logger.info("Proxy pool listo: %d proxies disponibles.", len(pool))
+        logger.info("Proxy pool ready: %d proxies available.", len(pool))
     else:
         logger.warning(
-            "Proxy pool vacío tras parsear (¿formato incorrecto? Se esperaba "
-            "host:port:user:pass por línea)."
+            "Proxy pool empty after parsing (wrong format? expected "
+            "host:port:user:pass per line)."
         )
     return pool
 
 
-# Ruta por defecto al CSV de coordenadas (versionado con el código,
-# no con los datos: aeropuertos top-70 EE.UU.).
+# Default path to the coordinates CSV (versioned with the code, not the
+# data: top-70 U.S. airports).
 _DEFAULT_COORDS_PATH = Path(__file__).parent / "reference" / "airport_coords.csv"
 
-# Endpoint público de Open-Meteo. El plan gratuito permite ~10k llamadas/día
-# y cada llamada cubre el rango completo solicitado, así que 70 aeropuertos
-# × 2 años = 70 llamadas — muy holgado.
+# Open-Meteo public endpoint. The free plan allows ~10k calls/day and each
+# call covers the full requested range, so 70 airports × 2 years = 70
+# calls — very comfortable.
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-# Parámetros pedidos al API (orden estable — afecta a la firma del cache).
+# Parameters requested from the API (stable order — affects the cache key).
 _HOURLY_PARAMS = (
     "wind_speed_10m",
     "wind_gusts_10m",
@@ -179,16 +177,16 @@ _HOURLY_PARAMS = (
     "weather_code",
 )
 
-# Versión del esquema de weather features. Cualquier cambio en la lista de
-# columnas devueltas o en el bucketing de ``bucket_wmo_code`` debe
-# incrementar este valor para que ``_snapshot_cache_key`` (en
-# graph_builder) invalide cachés anteriores que asumieran el esquema viejo.
+# Version of the weather feature schema. Any change to the list of returned
+# columns or to the bucketing in ``bucket_wmo_code`` must increment this
+# value so that ``_snapshot_cache_key`` (in graph_builder) invalidates
+# previous caches that assumed the old schema.
 WEATHER_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
 class AirportCoord:
-    """Coordenadas geográficas de un aeropuerto."""
+    """Geographic coordinates of an airport."""
 
     iata: str
     name: str
@@ -200,14 +198,14 @@ class AirportCoord:
 def load_airport_coords(
     path: Path | None = None,
 ) -> dict[str, AirportCoord]:
-    """Carga el CSV de coordenadas en un mapeo IATA → :class:`AirportCoord`.
+    """Load the coordinates CSV into an IATA → :class:`AirportCoord` map.
 
     Args:
-        path: Ruta al CSV. Si ``None``, usa el bundled
-            ``src/data/reference/airport_coords.csv`` (top-70 EE.UU.).
+        path: Path to the CSV. If ``None``, uses the bundled
+            ``src/data/reference/airport_coords.csv`` (top-70 U.S.).
 
     Returns:
-        Diccionario ``{iata: AirportCoord}``.
+        Dictionary ``{iata: AirportCoord}``.
     """
     csv_path = Path(path) if path is not None else _DEFAULT_COORDS_PATH
     df = pd.read_csv(csv_path)
@@ -223,24 +221,24 @@ def load_airport_coords(
     }
 
 
-# WMO weather codes oficiales (ver Open-Meteo docs):
-#   0       Cielo despejado
-#   1-3     Nubosidad creciente
-#   45,48   Niebla
-#   51-57   Llovizna (incluye congelante)
-#   61-67   Lluvia (incluye congelante)
-#   71-77   Nieve / granos de nieve
-#   80-82   Chubascos de lluvia
-#   85-86   Chubascos de nieve
-#   95      Tormenta
-#   96, 99  Tormenta con granizo
+# Official WMO weather codes (see Open-Meteo docs):
+#   0       Clear sky
+#   1-3     Increasing cloudiness
+#   45,48   Fog
+#   51-57   Drizzle (incl. freezing)
+#   61-67   Rain (incl. freezing)
+#   71-77   Snow / snow grains
+#   80-82   Rain showers
+#   85-86   Snow showers
+#   95      Thunderstorm
+#   96, 99  Thunderstorm with hail
 #
-# Bucketing en 5 categorías (canonical para operaciones aéreas):
-#   0  clear/cloudy   → impacto mínimo
-#   1  fog            → IFR forzado, reduce capacidad
-#   2  rain/drizzle   → mojado, posible IFR
-#   3  snow           → cierres, deicing
-#   4  thunderstorm   → ground stops, holds — la causa #1 de delays NAS
+# Bucketing into 5 categories (canonical for air operations):
+#   0  clear/cloudy   → minimal impact
+#   1  fog            → forced IFR, reduces capacity
+#   2  rain/drizzle   → wet, possible IFR
+#   3  snow           → closures, deicing
+#   4  thunderstorm   → ground stops, holds — the #1 cause of NAS delays
 _WMO_BUCKET_MAP: dict[int, int] = {}
 for code in range(0, 4):
     _WMO_BUCKET_MAP[code] = 0
@@ -257,10 +255,10 @@ NUM_WEATHER_CATEGORIES = 5
 
 
 def bucket_wmo_code(code: int | float) -> int:
-    """Mapea un código WMO al bucket 0..4 (ver módulo docstring).
+    """Map a WMO code to bucket 0..4 (see the module docstring).
 
-    Códigos desconocidos o ``NaN`` caen a bucket 0 (clear/cloudy) por
-    conservadurismo — ese es el bucket sin impacto operativo.
+    Unknown codes or ``NaN`` fall to bucket 0 (clear/cloudy) for
+    conservativeness — that is the operationally no-impact bucket.
     """
     if code is None or (isinstance(code, float) and np.isnan(code)):
         return 0
@@ -271,7 +269,7 @@ def bucket_wmo_code(code: int | float) -> int:
 
 
 def _cache_path(cache_dir: Path, iata: str, start: dt.date, end: dt.date) -> Path:
-    """Ruta determinista del parquet en disco para un (iata, rango)."""
+    """Deterministic on-disk parquet path for an (iata, range)."""
     fname = f"{iata}_{start.isoformat()}_{end.isoformat()}.parquet"
     return cache_dir / fname
 
@@ -282,7 +280,7 @@ def _open_meteo_request_url(
     start: dt.date,
     end: dt.date,
 ) -> str:
-    """Construye la URL completa con query string para el archive endpoint."""
+    """Build the full URL with query string for the archive endpoint."""
     params = {
         "latitude": f"{latitude:.4f}",
         "longitude": f"{longitude:.4f}",
@@ -298,10 +296,10 @@ def _open_meteo_request_url(
 
 
 def _fetch_json(url: str, timeout: float = 30.0, *, proxy: str | None = None) -> dict:
-    """HTTP GET con stdlib (sin nueva dependencia). Levanta ``HTTPError``.
+    """HTTP GET with stdlib (no new dependency). Raises ``HTTPError``.
 
-    Si se pasa ``proxy`` (formato ``http://user:pass@host:port``), la
-    petición se enruta por ese proxy en lugar de salir directa.
+    If ``proxy`` is passed (format ``http://user:pass@host:port``), the
+    request is routed through that proxy instead of going out directly.
     """
     req = urllib.request.Request(url, headers={"User-Agent": "flight-delay-prop/0.1"})
     if proxy:
@@ -316,9 +314,9 @@ def _fetch_json(url: str, timeout: float = 30.0, *, proxy: str | None = None) ->
 
 
 def _parse_open_meteo_response(payload: dict) -> pd.DataFrame:
-    """Convierte la respuesta JSON de Open-Meteo en un DataFrame horario.
+    """Convert the Open-Meteo JSON response into an hourly DataFrame.
 
-    Estructura esperada::
+    Expected structure::
 
         {
           "hourly": {
@@ -331,13 +329,13 @@ def _parse_open_meteo_response(payload: dict) -> pd.DataFrame:
           }
         }
 
-    Devuelve un DataFrame indexado por ``timestamp`` (datetime64[ns]) con
-    una columna por parámetro y la categoría derivada ``weather_category``.
+    Returns a DataFrame indexed by ``timestamp`` (datetime64[ns]) with one
+    column per parameter and the derived ``weather_category``.
     """
     hourly = payload.get("hourly") or {}
     if not hourly or "time" not in hourly:
-        # Respuesta vacía o malformada — devolvemos DataFrame vacío con
-        # las columnas esperadas para que aguas abajo todo sea pd.NA.
+        # Empty or malformed response — return an empty DataFrame with the
+        # expected columns so everything downstream is pd.NA.
         idx = pd.DatetimeIndex([], name="timestamp")
         return pd.DataFrame(
             {p: pd.Series(dtype="float32") for p in _HOURLY_PARAMS}
@@ -350,14 +348,14 @@ def _parse_open_meteo_response(payload: dict) -> pd.DataFrame:
     df = pd.DataFrame(data, index=times)
     df.index.name = "timestamp"
 
-    # Tipos compactos: float32 para los numéricos, int8 para el código.
+    # Compact types: float32 for the numeric ones, int8 for the code.
     for col in ("wind_speed_10m", "wind_gusts_10m", "precipitation", "cloud_cover"):
         df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
     df["weather_code"] = pd.to_numeric(df["weather_code"], errors="coerce").astype(
         "Int16"
     )
 
-    # Bucket categórico derivado (vectorizado para evitar apply por fila).
+    # Derived categorical bucket (vectorized to avoid a per-row apply).
     df["weather_category"] = (
         df["weather_code"].map(_WMO_BUCKET_MAP).fillna(0).astype("int8")
     )
@@ -374,22 +372,22 @@ def fetch_open_meteo(
     timeout: float = 30.0,
     _http_fetcher=_fetch_json,
 ) -> pd.DataFrame:
-    """Obtiene observaciones horarias de Open-Meteo (con caché en disco).
+    """Fetch hourly observations from Open-Meteo (with on-disk cache).
 
     Args:
-        latitude, longitude: Coordenadas decimales del punto.
-        start_date, end_date: Rango cerrado por ambos lados (Open-Meteo
-            incluye ``end_date`` completo).
-        cache_path: Si se pasa, se persiste/lee parquet en esa ruta. La
-            existencia de ``cache_path`` salta la llamada HTTP.
-        timeout: Segundos antes de fallar la petición HTTP.
-        _http_fetcher: Función inyectable para tests (mock del transport).
+        latitude, longitude: Decimal coordinates of the point.
+        start_date, end_date: Range closed on both sides (Open-Meteo
+            includes the full ``end_date``).
+        cache_path: If passed, parquet is persisted/read at that path. The
+            existence of ``cache_path`` skips the HTTP call.
+        timeout: Seconds before the HTTP request fails.
+        _http_fetcher: Injectable function for tests (transport mock).
 
     Returns:
-        DataFrame horario con columnas
+        Hourly DataFrame with columns
         ``[wind_speed_10m, wind_gusts_10m, precipitation, cloud_cover,
-        weather_code, weather_category]`` indexado por ``timestamp``.
-        Si la petición falla, devuelve DataFrame vacío con esas columnas.
+        weather_code, weather_category]`` indexed by ``timestamp``. If the
+        request fails, returns an empty DataFrame with those columns.
     """
     if cache_path is not None and cache_path.exists():
         try:
@@ -399,60 +397,60 @@ def fetch_open_meteo(
             return cached
         except Exception as exc:  # pragma: no cover - corruption recovery
             logger.warning(
-                "Caché meteorológica corrupta en %s (%s) — reintentando HTTP.",
+                "Corrupt weather cache at %s (%s) — retrying HTTP.",
                 cache_path, exc,
             )
 
     url = _open_meteo_request_url(latitude, longitude, start_date, end_date)
 
-    # Lista de proxies a probar: primero salida directa (None), después
-    # hasta _MAX_PROXY_RETRIES proxies del pool. Si no hay pool (env vars
-    # sin definir, o tests con _http_fetcher inyectado que no soporta
-    # proxies), sólo se intenta la salida directa — comportamiento idéntico
-    # al original.
+    # List of proxies to try: first direct egress (None), then up to
+    # _MAX_PROXY_RETRIES proxies from the pool. If there is no pool (env
+    # vars undefined, or tests with an injected _http_fetcher that does not
+    # support proxies), only the direct egress is attempted — identical
+    # behavior to the original.
     using_default_fetcher = _http_fetcher is _fetch_json
     proxies_to_try: list[str | None] = [None]
     if using_default_fetcher:
         pool = _load_proxy_pool()
         if pool:
-            # Escogemos una sub-muestra distinta en cada llamada para
-            # repartir carga entre los 100 proxies sin recordar estado.
+            # We pick a different sub-sample on each call to spread load
+            # across the 100 proxies without remembering state.
             proxies_to_try.extend(random.sample(pool, k=min(_MAX_PROXY_RETRIES, len(pool))))
 
     payload: dict | None = None
     last_exc: Exception | None = None
     for attempt_idx, proxy in enumerate(proxies_to_try):
         if attempt_idx > 0:
-            # Backoff suave (0.5–1.0 s) antes de cada reintento, evita
-            # martillear al servidor incluso a través de proxies.
+            # Gentle backoff (0.5–1.0 s) before each retry, avoids
+            # hammering the server even through proxies.
             time.sleep(0.5 + random.random() * 0.5)
         try:
             if using_default_fetcher:
                 payload = _fetch_json(url, timeout=timeout, proxy=proxy)
             else:
-                # Tests inyectan un fetcher con firma antigua (sin proxy).
+                # Tests inject a fetcher with the old signature (no proxy).
                 payload = _http_fetcher(url, timeout=timeout)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last_exc = exc
             if proxy is None and len(proxies_to_try) > 1:
                 logger.warning(
-                    "Open-Meteo directo falló (lat=%.4f, lon=%.4f): %s. "
-                    "Reintentando vía proxy pool (%d disponibles).",
+                    "Direct Open-Meteo failed (lat=%.4f, lon=%.4f): %s. "
+                    "Retrying via proxy pool (%d available).",
                     latitude, longitude, exc, len(proxies_to_try) - 1,
                 )
             continue
         else:
             if proxy is not None:
                 logger.info(
-                    "Open-Meteo OK vía proxy en intento %d (lat=%.4f, lon=%.4f).",
+                    "Open-Meteo OK via proxy on attempt %d (lat=%.4f, lon=%.4f).",
                     attempt_idx + 1, latitude, longitude,
                 )
             break
 
     if payload is None:
         logger.warning(
-            "Open-Meteo falló tras %d intento(s) (lat=%.4f, lon=%.4f, %s..%s): %s. "
-            "Devolviendo DataFrame vacío; el builder rellenará con 0.",
+            "Open-Meteo failed after %d attempt(s) (lat=%.4f, lon=%.4f, %s..%s): %s. "
+            "Returning empty DataFrame; the builder will fill with 0.",
             len(proxies_to_try), latitude, longitude, start_date, end_date, last_exc,
         )
         return _parse_open_meteo_response({})
@@ -476,25 +474,25 @@ def load_weather_for_airports(
     timeout: float = 30.0,
     _http_fetcher=_fetch_json,
 ) -> pd.DataFrame:
-    """Descarga (o lee de caché) datos meteorológicos para varios aeropuertos.
+    """Download (or read from cache) weather data for several airports.
 
     Args:
-        iata_codes: Iterable de IATAs a cubrir.
-        start_date, end_date: Rango (inclusivo) común para todos.
-        coords: Mapeo IATA→AirportCoord. Si ``None``, se carga del CSV
-            bundled. Aeropuertos sin entrada se omiten con warning.
-        cache_dir: Directorio raíz para los parquets en disco. ``None``
-            desactiva la caché (descarga cada vez — solo recomendable
-            para tests).
-        timeout: Segundos antes de fallar cada petición HTTP.
-        _http_fetcher: Inyectable para tests.
+        iata_codes: Iterable of IATAs to cover.
+        start_date, end_date: Common (inclusive) range for all.
+        coords: IATA→AirportCoord map. If ``None``, loaded from the bundled
+            CSV. Airports without an entry are skipped with a warning.
+        cache_dir: Root directory for the on-disk parquets. ``None``
+            disables the cache (downloads every time — only recommended for
+            tests).
+        timeout: Seconds before each HTTP request fails.
+        _http_fetcher: Injectable for tests.
 
     Returns:
-        DataFrame con MultiIndex ``(iata, timestamp)`` y columnas
+        DataFrame with MultiIndex ``(iata, timestamp)`` and columns
         ``[wind_speed_10m, wind_gusts_10m, precipitation, cloud_cover,
-        weather_code, weather_category]``. Aeropuertos sin datos no
-        aparecen en el índice; el caller (graph_builder) trata su ausencia
-        como "no señal" y rellena con 0.
+        weather_code, weather_category]``. Airports without data do not
+        appear in the index; the caller (graph_builder) treats their
+        absence as "no signal" and fills with 0.
     """
     if coords is None:
         coords = load_airport_coords()
@@ -534,15 +532,15 @@ def load_weather_for_airports(
 
     if missing:
         logger.warning(
-            "Sin coordenadas en airport_coords.csv para %d aeropuertos: %s. "
-            "Sus features meteorológicas serán 0 (no-señal).",
+            "No coordinates in airport_coords.csv for %d airports: %s. "
+            "Their weather features will be 0 (no signal).",
             len(missing), ", ".join(missing[:10]) + ("..." if len(missing) > 10 else ""),
         )
 
     if not frames:
         logger.warning(
-            "load_weather_for_airports: 0 aeropuertos devolvieron datos "
-            "(%d solicitados). El bloque H del feature tensor quedará en 0.",
+            "load_weather_for_airports: 0 airports returned data "
+            "(%d requested). Block H of the feature tensor will stay at 0.",
             len(iata_list),
         )
         return pd.DataFrame(
@@ -553,7 +551,7 @@ def load_weather_for_airports(
     out = pd.concat(frames, axis=0)
     out = out.sort_index()
     logger.info(
-        "Meteorología cargada: %d aeropuertos × %d horas (rango %s..%s).",
+        "Weather loaded: %d airports × %d hours (range %s..%s).",
         out.index.get_level_values("iata").nunique(),
         len(out.index.get_level_values("timestamp").unique()),
         start_date, end_date,

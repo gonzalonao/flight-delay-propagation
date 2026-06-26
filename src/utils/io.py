@@ -1,7 +1,7 @@
-"""Utilidades de entrada/salida para rutas y checkpoints.
+"""Input/output utilities for paths and checkpoints.
 
-Provee funciones para resolver rutas del proyecto y gestionar
-el guardado/carga de checkpoints de modelos.
+Provides functions to resolve project paths and manage saving/loading of
+model checkpoints.
 """
 
 from pathlib import Path
@@ -11,36 +11,37 @@ import torch
 
 
 def get_project_root() -> Path:
-    """Devuelve la ruta raíz del proyecto.
+    """Return the project root path.
 
-    Busca hacia arriba desde este archivo hasta encontrar pyproject.toml.
+    Searches upward from this file until it finds pyproject.toml.
 
     Returns:
-        Ruta absoluta al directorio raíz del proyecto.
+        Absolute path to the project root directory.
     """
     current = Path(__file__).resolve()
     for parent in current.parents:
         if (parent / "pyproject.toml").exists():
             return parent
-    raise RuntimeError("No se encontró pyproject.toml en los directorios padres")
+    raise RuntimeError("pyproject.toml not found in any parent directory")
 
 
 def get_data_dir(
     subdir: str = "raw",
     config: dict[str, Any] | None = None,
 ) -> Path:
-    """Devuelve la ruta al directorio de datos.
+    """Return the path to the data directory.
 
-    Si se proporciona config, usa las rutas definidas en data.raw_dir o
-    data.processed_dir. Si no, usa las rutas por defecto dentro del proyecto.
-    Soporta rutas absolutas (e.g., "E:/TFM-Data/raw") y relativas.
+    If config is provided, uses the paths defined in data.raw_dir or
+    data.processed_dir. Otherwise, uses the default paths inside the
+    project. Supports absolute paths (e.g., "E:/TFM-Data/raw") and relative
+    ones.
 
     Args:
-        subdir: Tipo de datos ("raw" o "processed").
-        config: Diccionario de configuración (opcional).
+        subdir: Data type ("raw" or "processed").
+        config: Configuration dictionary (optional).
 
     Returns:
-        Ruta al directorio de datos solicitado.
+        Path to the requested data directory.
     """
     if config is not None:
         key = "raw_dir" if subdir == "raw" else "processed_dir"
@@ -58,10 +59,10 @@ def get_data_dir(
 
 
 def get_output_dir() -> Path:
-    """Devuelve la ruta al directorio de salida para checkpoints y resultados.
+    """Return the path to the output directory for checkpoints and results.
 
     Returns:
-        Ruta al directorio outputs/.
+        Path to the outputs/ directory.
     """
     output_dir = get_project_root() / "outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -76,19 +77,19 @@ def save_checkpoint(
     path: str | Path,
     model_name: str | None = None,
 ) -> None:
-    """Guarda un checkpoint del modelo con estado del optimizador y métricas.
+    """Save a model checkpoint with optimizer state and metrics.
 
     Args:
-        model: Modelo PyTorch a guardar.
-        optimizer: Optimizador con su estado actual.
-        epoch: Época actual del entrenamiento.
-        metrics: Diccionario con métricas de evaluación.
-        path: Ruta donde guardar el checkpoint.
-        model_name: Identificador lógico del modelo (e.g., "multi_horizon_gat").
-            Si se proporciona, ``load_checkpoint`` puede validar que el
-            modelo destino tenga la misma arquitectura, evitando errores
-            crípticos de ``state_dict`` cuando el usuario olvida pasar el
-            ``--config`` correcto a ``evaluate.py``.
+        model: PyTorch model to save.
+        optimizer: Optimizer with its current state.
+        epoch: Current training epoch.
+        metrics: Dictionary of evaluation metrics.
+        path: Path where the checkpoint is saved.
+        model_name: Logical model identifier (e.g., "multi_horizon_gat").
+            If provided, ``load_checkpoint`` can validate that the target
+            model has the same architecture, avoiding cryptic
+            ``state_dict`` errors when the user forgets to pass the correct
+            ``--config`` to ``evaluate.py``.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,20 +111,21 @@ def load_checkpoint_inference_only(
     model: torch.nn.Module,
     device: str = "cpu",
 ) -> dict[str, Any]:
-    """Carga un checkpoint inference-only (sin optimizer_state_dict).
+    """Load an inference-only checkpoint (without optimizer_state_dict).
 
-    Usa ``weights_only=True`` para evitar la ejecución de código pickle
-    arbitrario. Requiere que el checkpoint haya sido preparado con
-    ``deploy/prep_inference_checkpoint.py`` (que elimina el optimizer_state_dict,
-    el cual no es deserializable con weights_only=True en PyTorch ≥2.1).
+    Uses ``weights_only=True`` to avoid executing arbitrary pickle code.
+    Requires that the checkpoint was prepared with
+    ``deploy/prep_inference_checkpoint.py`` (which removes the
+    optimizer_state_dict, which is not deserializable with
+    weights_only=True in PyTorch ≥2.1).
 
     Args:
-        path: Ruta al archivo de checkpoint inference-only (.pt).
-        model: Modelo donde cargar los pesos.
-        device: Dispositivo destino ("cpu" o "cuda").
+        path: Path to the inference-only checkpoint file (.pt).
+        model: Model into which to load the weights.
+        device: Target device ("cpu" or "cuda").
 
     Returns:
-        Diccionario con ``epoch``, ``metrics`` y opcionalmente ``model_name``.
+        Dictionary with ``epoch``, ``metrics`` and optionally ``model_name``.
     """
     checkpoint = torch.load(path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -142,23 +144,23 @@ def load_checkpoint(
     optimizer: torch.optim.Optimizer | None = None,
     expected_model_name: str | None = None,
 ) -> dict[str, Any]:
-    """Carga un checkpoint y restaura el estado del modelo y optimizador.
+    """Load a checkpoint and restore the model and optimizer state.
 
-    Si el checkpoint trae ``model_name`` y se pasa ``expected_model_name``,
-    se valida la coincidencia ANTES de intentar ``load_state_dict`` para dar
-    un error claro en vez del críptico ``Missing/Unexpected keys`` de
-    PyTorch (que aparece típicamente cuando se evalúa un checkpoint sin
-    pasar el ``--config`` correcto).
+    If the checkpoint carries ``model_name`` and ``expected_model_name`` is
+    passed, the match is validated BEFORE attempting ``load_state_dict`` to
+    give a clear error instead of PyTorch's cryptic ``Missing/Unexpected
+    keys`` (which typically appears when evaluating a checkpoint without
+    passing the correct ``--config``).
 
     Args:
-        path: Ruta al archivo de checkpoint.
-        model: Modelo donde cargar los pesos.
-        optimizer: Optimizador donde restaurar el estado (opcional).
-        expected_model_name: Nombre esperado del modelo (opcional). Si el
-            checkpoint registra un nombre distinto, lanza ``ValueError``.
+        path: Path to the checkpoint file.
+        model: Model into which to load the weights.
+        optimizer: Optimizer into which to restore the state (optional).
+        expected_model_name: Expected model name (optional). If the
+            checkpoint records a different name, raises ``ValueError``.
 
     Returns:
-        Diccionario con ``epoch``, ``metrics`` y, si está disponible,
+        Dictionary with ``epoch``, ``metrics`` and, if available,
         ``model_name``.
     """
     map_location = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -171,11 +173,11 @@ def load_checkpoint(
         and saved_model_name != expected_model_name
     ):
         raise ValueError(
-            f"Mismatch de arquitectura al cargar checkpoint '{path}': "
-            f"el checkpoint corresponde a model_name='{saved_model_name}' "
-            f"pero la configuración pasada construye '{expected_model_name}'. "
-            f"Pasa --config configs/{saved_model_name}.yaml o el config "
-            f"original con el que se entrenó."
+            f"Architecture mismatch loading checkpoint '{path}': "
+            f"the checkpoint corresponds to model_name='{saved_model_name}' "
+            f"but the passed configuration builds '{expected_model_name}'. "
+            f"Pass --config configs/{saved_model_name}.yaml or the original "
+            f"config it was trained with."
         )
 
     model.load_state_dict(checkpoint["model_state_dict"])

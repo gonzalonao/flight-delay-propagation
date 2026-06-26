@@ -1,9 +1,9 @@
-"""Inferencia reutilizable para modelos de secuencia (seq2seq_gnn).
+"""Reusable inference for sequence models (seq2seq_gnn).
 
-Factoriza el forward-pass + ensamblado del DataFrame de predicciones para
-que tanto el notebook de Fabric (``fabric/notebooks/nb_inference.ipynb``)
-como los scripts locales (``scripts/predict.py``, ``scripts/export_powerbi.py``)
-compartan una única ruta de código y produzcan el mismo esquema "long".
+Factors out the forward pass + prediction-DataFrame assembly so that both
+the Fabric notebook (``fabric/notebooks/nb_inference.ipynb``) and the local
+scripts (``scripts/predict.py``, ``scripts/export_powerbi.py``) share a
+single code path and produce the same "long" schema.
 """
 
 from src.inference.predictor import (

@@ -1,13 +1,13 @@
-"""Logging unificado de resultados de test.
+"""Unified logging of test results.
 
-Antes de este módulo las funciones ``_log_test_results`` y
-``_log_multi_horizon_results`` estaban duplicadas byte-a-byte en
-``scripts/train.py`` y ``scripts/evaluate.py``. Cualquier cambio
-de formato (e.g., añadir un widget de incertidumbre) había que
-hacerlo dos veces y silenciaba divergencias accidentales.
+Before this module, the functions ``_log_test_results`` and
+``_log_multi_horizon_results`` were duplicated byte-for-byte in
+``scripts/train.py`` and ``scripts/evaluate.py``. Any formatting change
+(e.g., adding an uncertainty widget) had to be made twice and silently
+masked accidental divergences.
 
-Las funciones aquí aceptan un ``logger`` opcional para que cada
-script use su propio logger con nombre coherente con el módulo.
+The functions here accept an optional ``logger`` so each script can use its
+own logger with a name consistent with the module.
 """
 
 from __future__ import annotations
@@ -24,24 +24,24 @@ def log_test_results(
     model_name: str,
     logger: logging.Logger | None = None,
 ) -> None:
-    """Loguea las métricas de test single-horizon en formato unificado.
+    """Log the single-horizon test metrics in a unified format.
 
     Args:
-        metrics: Diccionario con claves ``mae``, ``rmse``, ``mape``, ``r2``,
+        metrics: Dictionary with keys ``mae``, ``rmse``, ``mape``, ``r2``,
             ``accuracy``, ``precision``, ``recall``, ``f1``.
-        model_name: Nombre lógico del modelo (e.g., ``"dense_nn"``).
-        logger: Logger destino. Si ``None`` se usa el logger del módulo.
+        model_name: Logical model name (e.g., ``"dense_nn"``).
+        logger: Target logger. If ``None`` the module logger is used.
     """
     log = logger or _default_logger
     log.info("=" * 50)
-    log.info("RESULTADOS EN TEST — %s", model_name)
+    log.info("TEST RESULTS — %s", model_name)
     log.info("-" * 50)
-    log.info("  Regresión:")
+    log.info("  Regression:")
     log.info("    MAE:  %.4f min", metrics["mae"])
     log.info("    RMSE: %.4f min", metrics["rmse"])
     log.info("    MAPE: %.4f %%", metrics["mape"])
     log.info("    R²:   %.4f", metrics["r2"])
-    log.info("  Clasificación (umbral=15 min):")
+    log.info("  Classification (threshold=15 min):")
     log.info("    ACCURACY:  %.4f", metrics["accuracy"])
     log.info("    PRECISION: %.4f", metrics["precision"])
     log.info("    RECALL:    %.4f", metrics["recall"])
@@ -55,18 +55,18 @@ def log_multi_horizon_results(
     horizons: list[int],
     logger: logging.Logger | None = None,
 ) -> None:
-    """Loguea las métricas multi-horizonte en formato unificado.
+    """Log the multi-horizon metrics in a unified format.
 
     Args:
-        metrics: Diccionario con una entrada ``"horizon_{h}h"`` por cada
-            horizonte y una entrada ``"average"`` con los promedios.
-        model_name: Nombre lógico del modelo.
-        horizons: Lista de horizontes (en horas).
-        logger: Logger destino. Si ``None`` se usa el logger del módulo.
+        metrics: Dictionary with one ``"horizon_{h}h"`` entry per horizon
+            and an ``"average"`` entry with the averages.
+        model_name: Logical model name.
+        horizons: List of horizons (in hours).
+        logger: Target logger. If ``None`` the module logger is used.
     """
     log = logger or _default_logger
     log.info("=" * 60)
-    log.info("RESULTADOS EN TEST — %s (multi-horizonte)", model_name)
+    log.info("TEST RESULTS — %s (multi-horizon)", model_name)
     log.info("=" * 60)
 
     has_bce = "bce_f1" in metrics["average"]
@@ -74,7 +74,7 @@ def log_multi_horizon_results(
     for h in horizons:
         key = f"horizon_{h}h"
         m = metrics[key]
-        log.info("  Horizonte +%dh:", h)
+        log.info("  Horizon +%dh:", h)
         log.info(
             "    MAE: %.4f | RMSE: %.4f | MAPE: %.4f%% | R²: %.4f",
             m["mae"], m["rmse"], m["mape"], m["r2"],
@@ -92,19 +92,19 @@ def log_multi_horizon_results(
 
     avg = metrics["average"]
     log.info("-" * 60)
-    log.info("  PROMEDIO (todos los horizontes):")
-    log.info("    Regresión:")
+    log.info("  AVERAGE (all horizons):")
+    log.info("    Regression:")
     log.info("      MAE:  %.4f min", avg["mae"])
     log.info("      RMSE: %.4f min", avg["rmse"])
     log.info("      MAPE: %.4f %%", avg["mape"])
     log.info("      R²:   %.4f", avg["r2"])
-    log.info("    Clasificación derivada del regresor (umbral=15 min):")
+    log.info("    Classification derived from the regressor (threshold=15 min):")
     log.info("      ACCURACY:  %.4f", avg["accuracy"])
     log.info("      PRECISION: %.4f", avg["precision"])
     log.info("      RECALL:    %.4f", avg["recall"])
     log.info("      F1:        %.4f", avg["f1"])
     if has_bce:
-        log.info("    Clasificación del head BCE (sigmoid + 0.5):")
+        log.info("    BCE-head classification (sigmoid + 0.5):")
         log.info("      ACCURACY:  %.4f", avg["bce_accuracy"])
         log.info("      PRECISION: %.4f", avg["bce_precision"])
         log.info("      RECALL:    %.4f", avg["bce_recall"])

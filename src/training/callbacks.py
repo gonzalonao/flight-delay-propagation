@@ -1,6 +1,6 @@
-"""Callbacks para el bucle de entrenamiento.
+"""Callbacks for the training loop.
 
-Implementa Early Stopping y guardado de checkpoints del mejor modelo.
+Implements Early Stopping and saving of the best-model checkpoint.
 """
 
 import torch
@@ -13,11 +13,11 @@ logger = setup_logger(__name__)
 
 
 class EarlyStopping:
-    """Detiene el entrenamiento si la métrica de validación no mejora.
+    """Stop training if the validation metric does not improve.
 
     Args:
-        patience: Épocas a esperar sin mejora antes de detener.
-        min_delta: Mejora mínima para considerar que hubo progreso.
+        patience: Epochs to wait without improvement before stopping.
+        min_delta: Minimum improvement to consider that progress was made.
     """
 
     def __init__(self, patience: int = 15, min_delta: float = 1e-4) -> None:
@@ -27,13 +27,13 @@ class EarlyStopping:
         self.best_loss: float | None = None
 
     def step(self, val_loss: float) -> bool:
-        """Evalúa si debe detenerse el entrenamiento.
+        """Evaluate whether training should stop.
 
         Args:
-            val_loss: Pérdida de validación actual.
+            val_loss: Current validation loss.
 
         Returns:
-            True si debe detenerse, False si debe continuar.
+            True if it should stop, False if it should continue.
         """
         if self.best_loss is None:
             self.best_loss = val_loss
@@ -49,15 +49,15 @@ class EarlyStopping:
 
 
 class ModelCheckpoint:
-    """Guarda el modelo cuando la pérdida de validación mejora.
+    """Save the model when the validation loss improves.
 
     Args:
-        path: Ruta donde guardar el checkpoint.
-        model_name: Identificador lógico del modelo (e.g.,
-            ``"multi_horizon_gat"``). Si se proporciona, se persiste en el
-            checkpoint para que ``load_checkpoint`` pueda validar la
-            arquitectura al cargar y dar errores claros si el ``--config``
-            de evaluación no coincide.
+        path: Path where the checkpoint is saved.
+        model_name: Logical model identifier (e.g.,
+            ``"multi_horizon_gat"``). If provided, it is persisted in the
+            checkpoint so that ``load_checkpoint`` can validate the
+            architecture on load and give clear errors if the evaluation
+            ``--config`` does not match.
     """
 
     def __init__(
@@ -76,13 +76,13 @@ class ModelCheckpoint:
         optimizer: torch.optim.Optimizer,
         epoch: int,
     ) -> None:
-        """Guarda el modelo si la pérdida mejora.
+        """Save the model if the loss improves.
 
         Args:
-            val_loss: Pérdida de validación actual.
-            model: Modelo a guardar.
-            optimizer: Optimizador a guardar.
-            epoch: Época actual.
+            val_loss: Current validation loss.
+            model: Model to save.
+            optimizer: Optimizer to save.
+            epoch: Current epoch.
         """
         if self.path is None:
             return
@@ -97,4 +97,4 @@ class ModelCheckpoint:
                 path=self.path,
                 model_name=self.model_name,
             )
-            logger.info("  Mejor modelo guardado (val_loss=%.4f)", val_loss)
+            logger.info("  Best model saved (val_loss=%.4f)", val_loss)

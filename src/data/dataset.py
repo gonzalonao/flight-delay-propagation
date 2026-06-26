@@ -1,7 +1,7 @@
-"""Clases Dataset de PyTorch para datos de vuelos.
+"""PyTorch Dataset classes for flight data.
 
-Proporciona datasets tabulares para modelos Dense/LSTM y se extenderá
-en fases posteriores con datasets de grafos para los modelos GNN.
+Provides tabular datasets for the Dense/LSTM models and is extended in
+later phases with graph datasets for the GNN models.
 """
 
 import numpy as np
@@ -15,14 +15,14 @@ logger = setup_logger(__name__)
 
 
 class FlightDelayDataset(Dataset):
-    """Dataset tabular para predicción de retraso de vuelos.
+    """Tabular dataset for flight-delay prediction.
 
-    Utilizado por los modelos DenseNN y como base para modelos más complejos.
-    Almacena features y targets como tensores de PyTorch.
+    Used by the DenseNN models and as a base for more complex models.
+    Stores features and targets as PyTorch tensors.
 
     Args:
-        features: Array NumPy o DataFrame con las features de entrada.
-        targets: Array NumPy o Series con los valores objetivo (ArrDelay).
+        features: NumPy array or DataFrame with the input features.
+        targets: NumPy array or Series with the target values (ArrDelay).
     """
 
     def __init__(
@@ -39,7 +39,7 @@ class FlightDelayDataset(Dataset):
         self.targets = torch.tensor(targets, dtype=torch.float32)
 
         logger.info(
-            "Dataset creado: %d muestras, %d features",
+            "Dataset created: %d samples, %d features",
             len(self.features), self.features.shape[1],
         )
 
@@ -51,23 +51,23 @@ class FlightDelayDataset(Dataset):
 
 
 def get_feature_columns(df: pd.DataFrame, target_col: str = "ArrDelay") -> list[str]:
-    """Identifica las columnas de features válidas para entrenamiento.
+    """Identify the valid feature columns for training.
 
-    Excluye la columna objetivo, columnas de identificación y columnas
-    categóricas originales (solo usa las versiones _encoded).
+    Excludes the target column, identifier columns and the original
+    categorical columns (only uses the _encoded versions).
 
     Args:
-        df: DataFrame con todas las columnas.
-        target_col: Nombre de la columna objetivo.
+        df: DataFrame with all columns.
+        target_col: Name of the target column.
 
     Returns:
-        Lista de nombres de columnas de features.
+        List of feature column names.
     """
-    # Columnas a excluir del entrenamiento
+    # Columns to exclude from training
     exclude = {
         target_col, "FlightDate", "Airline", "Origin", "Dest",
         "CRSDepTime", "Cancelled", "Diverted", "Hour", "day_of_week",
-        "Month", "DayOfWeek", "DayofMonth",  # Raw Parquet columns (usamos versiones procesadas)
+        "Month", "DayOfWeek", "DayofMonth",  # raw Parquet cols (use processed)
     }
 
     feature_cols = [
@@ -75,7 +75,7 @@ def get_feature_columns(df: pd.DataFrame, target_col: str = "ArrDelay") -> list[
         if col not in exclude and df[col].dtype in [np.float32, np.float64, np.int64, np.int32]
     ]
 
-    logger.info("Columnas de features seleccionadas: %d", len(feature_cols))
+    logger.info("Selected feature columns: %d", len(feature_cols))
     return feature_cols
 
 
@@ -84,26 +84,26 @@ def create_splits(
     config: dict,
     target_col: str = "ArrDelay",
 ) -> dict[str, tuple[pd.DataFrame, pd.Series]]:
-    """Divide los datos en train/val/test usando separación temporal.
+    """Split the data into train/val/test using a temporal split.
 
-    Soporta dos modos:
-    - **Por fecha** (preferido cuando hay varios años): claves
-      ``split.train_end`` y ``split.val_end`` como ISO ``YYYY-MM-DD``. El
-      corte se hace sobre ``FlightDate``: ``< train_end`` → train;
+    Supports two modes:
+    - **By date** (preferred when spanning several years): keys
+      ``split.train_end`` and ``split.val_end`` as ISO ``YYYY-MM-DD``. The
+      cut is on ``FlightDate``: ``< train_end`` → train;
       ``[train_end, val_end)`` → val; ``≥ val_end`` → test.
-    - **Por mes** (legacy): ``split.train_months`` /
-      ``split.val_months`` / ``split.test_months``. Solo válido cuando el
-      dataset cubre un único año — con dos años, jan-2018 y jan-2019 caen
-      en el mismo bucket.
+    - **By month** (legacy): ``split.train_months`` /
+      ``split.val_months`` / ``split.test_months``. Only valid when the
+      dataset covers a single year — with two years, jan-2018 and jan-2019
+      fall into the same bucket.
 
     Args:
-        df: DataFrame preprocesado con columna FlightDate.
-        config: Configuración con sección 'split'.
-        target_col: Nombre de la columna objetivo.
+        df: Preprocessed DataFrame with a FlightDate column.
+        config: Configuration with a 'split' section.
+        target_col: Name of the target column.
 
     Returns:
-        Diccionario con claves 'train', 'val', 'test', cada una
-        con tupla (features_df, targets_series).
+        Dictionary with keys 'train', 'val', 'test', each with a tuple
+        (features_df, targets_series).
     """
     split_config = config.get("split", {})
     train_end = split_config.get("train_end")
@@ -114,8 +114,8 @@ def create_splits(
     if train_end is not None and val_end is not None:
         if "FlightDate" not in df.columns:
             raise ValueError(
-                "Split por fecha requiere la columna FlightDate sin "
-                "transformar; añádela a `data.columns` del config."
+                "Date-based split requires the untransformed FlightDate "
+                "column; add it to `data.columns` in the config."
             )
         date_col = pd.to_datetime(df["FlightDate"])
         train_cutoff = pd.Timestamp(train_end)
@@ -141,10 +141,10 @@ def create_splits(
         elif "FlightDate" in df.columns:
             month_col = df["FlightDate"].dt.month
         elif "month" in df.columns:
-            # Solo válido si no está escalada (valores enteros 1-12)
+            # Only valid if not scaled (integer values 1-12)
             month_col = df["month"]
         else:
-            raise ValueError("No se encontró columna de mes ni FlightDate")
+            raise ValueError("No month column or FlightDate found")
 
         masks = {
             "train": month_col.isin(train_months),
@@ -152,15 +152,15 @@ def create_splits(
             "test": month_col.isin(test_months),
         }
         labels = {
-            "train": f"meses {train_months}",
-            "val": f"meses {val_months}",
-            "test": f"meses {test_months}",
+            "train": f"months {train_months}",
+            "val": f"months {val_months}",
+            "test": f"months {test_months}",
         }
 
     splits = {}
     for name, mask in masks.items():
         subset = df[mask]
         splits[name] = (subset[feature_cols], subset[target_col])
-        logger.info("Split %s: %d muestras (%s)", name, len(subset), labels[name])
+        logger.info("Split %s: %d samples (%s)", name, len(subset), labels[name])
 
     return splits

@@ -1,9 +1,9 @@
-"""Graph Attention Network multi-horizonte para prediccion de retrasos.
+"""Multi-horizon Graph Attention Network for delay prediction.
 
-Segundo modelo GNN del proyecto. Usa capas GATConv con atención
-multi-cabeza para ponderar la importancia de las conexiones entre
-aeropuertos. Predice el retraso promedio (en minutos) de cada aeropuerto
-a múltiples horizontes futuros simultáneamente (e.g., 1h, 2h, ..., 5h).
+The project's second GNN model. Uses GATConv layers with multi-head
+attention to weight the importance of connections between airports.
+Predicts the average delay (in minutes) of each airport at multiple future
+horizons simultaneously (e.g., 1h, 2h, ..., 5h).
 """
 
 import torch
@@ -13,30 +13,30 @@ from torch_geometric.nn import GATv2Conv
 
 
 class MultiHorizonGAT(nn.Module):
-    """GAT para predicción de retrasos multi-horizonte por aeropuerto.
+    """GAT for multi-horizon per-airport delay prediction.
 
-    Arquitectura: N capas ``GATv2Conv`` (con ``edge_dim`` para integrar
-    features de arista multi-canal), BatchNorm, ELU y dropout, seguidas
-    de una cabeza de proyección por horizonte. La atención aprende qué
-    conexiones entre aeropuertos son más relevantes para propagar
-    información de retrasos, ahora condicionada por las 5 features de
-    arista (Class A + B) que produce ``graph_builder``.
+    Architecture: N ``GATv2Conv`` layers (with ``edge_dim`` to integrate
+    multi-channel edge features), BatchNorm, ELU and dropout, followed by
+    a per-horizon projection head. Attention learns which connections
+    between airports are most relevant for propagating delay information,
+    now conditioned on the 5 edge features (Class A + B) produced by
+    ``graph_builder``.
 
     Args:
-        input_dim: Número de features por nodo.
-        hidden_channels: Dimensión de las capas ocultas (por cabeza).
-        num_heads: Número de cabezas de atención.
-        num_layers: Número de capas GATv2Conv.
-        num_horizons: Número de horizontes a predecir simultáneamente.
-        dropout: Probabilidad de dropout.
-        edge_dim: Dimensión del tensor edge_attr (5 con la pipeline
-            actual). Si ``None``, GATv2Conv ignora el edge_attr.
-        output_channels: Número de canales por horizonte. ``1`` (por
-            defecto) preserva el comportamiento histórico — output
-            ``[N, H]`` con sólo la regresión de ArrDelay. ``3`` activa la
-            cabeza multi-tarea de W2: output ``[N, H, 3]`` con canales
+        input_dim: Number of features per node.
+        hidden_channels: Dimension of the hidden layers (per head).
+        num_heads: Number of attention heads.
+        num_layers: Number of GATv2Conv layers.
+        num_horizons: Number of horizons to predict simultaneously.
+        dropout: Dropout probability.
+        edge_dim: Dimension of the edge_attr tensor (5 with the current
+            pipeline). If ``None``, GATv2Conv ignores edge_attr.
+        output_channels: Number of channels per horizon. ``1`` (default)
+            preserves the historical behavior — output ``[N, H]`` with
+            only the ArrDelay regression. ``3`` enables the W2 multi-task
+            head: output ``[N, H, 3]`` with channels
             ``(arr_delay, dep_delay_aux, pct_arr_delayed_15_logit)``,
-            consumido por ``MultiTaskLoss`` y por las métricas BCE.
+            consumed by ``MultiTaskLoss`` and the BCE metrics.
     """
 
     def __init__(
@@ -54,7 +54,7 @@ class MultiHorizonGAT(nn.Module):
 
         if output_channels < 1:
             raise ValueError(
-                f"output_channels debe ser >= 1, recibido {output_channels}"
+                f"output_channels must be >= 1, received {output_channels}"
             )
 
         self.dropout = dropout
@@ -65,7 +65,7 @@ class MultiHorizonGAT(nn.Module):
         self.convs = nn.ModuleList()
         self.bns = nn.ModuleList()
 
-        # Primera capa: input_dim -> hidden_channels * num_heads
+        # First layer: input_dim -> hidden_channels * num_heads
         self.convs.append(
             GATv2Conv(
                 input_dim,
@@ -78,7 +78,7 @@ class MultiHorizonGAT(nn.Module):
         )
         self.bns.append(nn.BatchNorm1d(hidden_channels * num_heads))
 
-        # Capas intermedias
+        # Intermediate layers
         for _ in range(num_layers - 2):
             self.convs.append(
                 GATv2Conv(
@@ -92,7 +92,7 @@ class MultiHorizonGAT(nn.Module):
             )
             self.bns.append(nn.BatchNorm1d(hidden_channels * num_heads))
 
-        # Última capa GAT: promedia las cabezas (concat=False)
+        # Last GAT layer: averages the heads (concat=False)
         if num_layers > 1:
             self.convs.append(
                 GATv2Conv(
@@ -108,10 +108,10 @@ class MultiHorizonGAT(nn.Module):
 
         final_dim = hidden_channels
 
-        # El head proyecta a `num_horizons * output_channels` y luego se
-        # reshape al tensor final. Una única capa lineal compartida entre
-        # todos los canales y horizontes es lo más simple y mantiene
-        # conteo de parámetros casi idéntico al diseño anterior cuando
+        # The head projects to `num_horizons * output_channels` and then
+        # reshapes to the final tensor. A single linear layer shared across
+        # all channels and horizons is the simplest option and keeps the
+        # parameter count almost identical to the previous design when
         # output_channels=1.
         self.horizon_head = nn.Sequential(
             nn.Linear(final_dim, final_dim),
@@ -126,24 +126,24 @@ class MultiHorizonGAT(nn.Module):
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Forward pass sobre el grafo con atención.
+        """Forward pass over the graph with attention.
 
         Args:
             x: Node features [num_nodes, input_dim].
-            edge_index: Índices de aristas [2, num_edges].
-            edge_attr: Tensor de aristas. Si ``self.edge_dim`` es None
-                o el tensor es 1D, se usa como peso escalar; en otro
-                caso pasa íntegro a GATv2Conv como atributos de arista.
+            edge_index: Edge indices [2, num_edges].
+            edge_attr: Edge tensor. If ``self.edge_dim`` is None or the
+                tensor is 1D, it is used as a scalar weight; otherwise it
+                is passed through to GATv2Conv as edge attributes.
 
         Returns:
-            Si ``output_channels == 1``: tensor ``[num_nodes,
-            num_horizons]`` (compatibilidad con el diseño previo).
-            Si ``output_channels > 1``: tensor ``[num_nodes,
-            num_horizons, output_channels]`` para multi-tarea (W2).
+            If ``output_channels == 1``: tensor ``[num_nodes,
+            num_horizons]`` (compatible with the previous design).
+            If ``output_channels > 1``: tensor ``[num_nodes,
+            num_horizons, output_channels]`` for multi-task (W2).
         """
-        # GATv2Conv acepta edge_attr siempre que su última dim coincida
-        # con `edge_dim`. Si recibimos un tensor 1D (legado), lo
-        # expandimos a [E, 1].
+        # GATv2Conv accepts edge_attr as long as its last dim matches
+        # `edge_dim`. If we receive a 1D tensor (legacy), we expand it
+        # to [E, 1].
         if edge_attr is not None and edge_attr.dim() == 1:
             edge_attr = edge_attr.unsqueeze(-1)
 
@@ -155,5 +155,5 @@ class MultiHorizonGAT(nn.Module):
 
         out = self.horizon_head(x)
         if self.output_channels == 1:
-            return out  # [N, H] — comportamiento histórico
+            return out  # [N, H] — historical behavior
         return out.view(out.size(0), self.num_horizons, self.output_channels)

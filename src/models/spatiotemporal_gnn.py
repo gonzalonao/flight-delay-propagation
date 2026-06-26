@@ -128,13 +128,13 @@ class GATEncoder(nn.Module):
         Returns:
             Node embeddings [num_nodes, hidden_channels].
         """
-        # Si el encoder no se construyó con ``edge_dim``, las capas
-        # ``GATv2Conv`` internas no tienen ``lin_edge`` y dispararían
-        # ``assert self.lin_edge is not None`` al pasarles ``edge_attr``.
-        # Ignoramos silenciosamente el tensor en ese caso: el caller
-        # construyó el encoder explícitamente sin soporte para edge
-        # features. En producción el factory siempre pasa ``edge_dim=5``,
-        # por lo que esta rama es un no-op y no altera el resultado.
+        # If the encoder was not built with ``edge_dim``, the internal
+        # ``GATv2Conv`` layers have no ``lin_edge`` and would trigger
+        # ``assert self.lin_edge is not None`` when passed ``edge_attr``.
+        # We silently ignore the tensor in that case: the caller built the
+        # encoder explicitly without edge-feature support. In production the
+        # factory always passes ``edge_dim=5``, so this branch is a no-op
+        # and does not change the result.
         if self.edge_dim is None:
             edge_attr = None
 

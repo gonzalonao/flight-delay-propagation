@@ -1,7 +1,7 @@
-"""Ingeniería de características para modelos de predicción de retrasos.
+"""Feature engineering for delay prediction models.
 
-Genera features temporales, codifica variables categóricas y prepara
-las columnas necesarias para el entrenamiento de modelos tabulares.
+Generates temporal features, encodes categorical variables and prepares
+the columns needed to train tabular models.
 """
 
 import numpy as np
@@ -14,23 +14,23 @@ logger = setup_logger(__name__)
 
 
 def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Añade features temporales derivadas de FlightDate y Hour.
+    """Add temporal features derived from FlightDate and Hour.
 
-    Genera:
-    - month, day_of_week (enteros)
-    - hour_sin, hour_cos (codificación cíclica de la hora)
-    - dow_sin, dow_cos (codificación cíclica del día de la semana)
-    - is_weekend (booleano)
+    Generates:
+    - month, day_of_week (integers)
+    - hour_sin, hour_cos (cyclic encoding of the hour)
+    - dow_sin, dow_cos (cyclic encoding of the day of week)
+    - is_weekend (boolean)
 
-    La codificación cíclica evita discontinuidades (e.g., hora 23 → 0).
+    Cyclic encoding avoids discontinuities (e.g., hour 23 → 0).
 
     Args:
-        df: DataFrame con columnas FlightDate y Hour.
+        df: DataFrame with FlightDate and Hour columns.
 
     Returns:
-        DataFrame con features temporales añadidas.
+        DataFrame with temporal features added.
     """
-    # Usar Month/DayOfWeek del Parquet si existen, sino extraer de FlightDate
+    # Use Month/DayOfWeek from the Parquet if present, otherwise extract from FlightDate
     if "Month" in df.columns and "month" not in df.columns:
         df["month"] = df["Month"]
     elif "FlightDate" in df.columns and "month" not in df.columns:
@@ -45,7 +45,7 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
         df["is_weekend"] = (df["day_of_week"] >= 5).astype(int)
 
     if "Hour" in df.columns:
-        # Codificación cíclica: transforma valores circulares a sin/cos
+        # Cyclic encoding: transforms circular values to sin/cos
         df["hour_sin"] = np.sin(2 * np.pi * df["Hour"] / 24)
         df["hour_cos"] = np.cos(2 * np.pi * df["Hour"] / 24)
 
@@ -53,7 +53,7 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
         df["dow_sin"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
         df["dow_cos"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
 
-    logger.info("Features temporales añadidas")
+    logger.info("Temporal features added")
     return df
 
 
@@ -62,18 +62,18 @@ def encode_categoricals(
     categorical_cols: list[str],
     encoders: dict[str, LabelEncoder] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
-    """Codifica variables categóricas con LabelEncoder.
+    """Encode categorical variables with LabelEncoder.
 
-    Si se proporcionan encoders existentes (del set de entrenamiento),
-    los usa para transformar. Si no, crea nuevos.
+    If existing encoders are provided (from the training set), they are used
+    to transform. Otherwise, new ones are created.
 
     Args:
-        df: DataFrame con columnas categóricas.
-        categorical_cols: Lista de columnas a codificar.
-        encoders: Diccionario de encoders pre-ajustados (opcional).
+        df: DataFrame with categorical columns.
+        categorical_cols: List of columns to encode.
+        encoders: Dictionary of pre-fitted encoders (optional).
 
     Returns:
-        Tupla de (DataFrame con columnas codificadas, diccionario de encoders).
+        Tuple of (DataFrame with encoded columns, encoders dictionary).
     """
     if encoders is None:
         encoders = {}
@@ -85,7 +85,7 @@ def encode_categoricals(
         col_encoded = f"{col}_encoded"
 
         if col in encoders:
-            # Usar encoder existente, manejar categorías no vistas
+            # Use existing encoder, handle unseen categories
             le = encoders[col]
             known = set(le.classes_)
             df[col_encoded] = df[col].apply(
@@ -96,7 +96,7 @@ def encode_categoricals(
             df[col_encoded] = le.fit_transform(df[col].astype(str))
             encoders[col] = le
 
-        logger.info("  %s: %d categorías codificadas", col, len(encoders[col].classes_))
+        logger.info("  %s: %d categories encoded", col, len(encoders[col].classes_))
 
     return df, encoders
 
@@ -106,33 +106,33 @@ def scale_features(
     numerical_cols: list[str],
     scaler: StandardScaler | None = None,
 ) -> tuple[pd.DataFrame, StandardScaler]:
-    """Normaliza columnas numéricas con StandardScaler.
+    """Normalize numerical columns with StandardScaler.
 
-    Ajusta el scaler solo en datos de entrenamiento (scaler=None).
-    Para validación/test, pasar el scaler ya ajustado.
+    Fits the scaler only on training data (scaler=None). For
+    validation/test, pass the already-fitted scaler.
 
     Args:
-        df: DataFrame con columnas numéricas.
-        numerical_cols: Lista de columnas a normalizar.
-        scaler: StandardScaler pre-ajustado (opcional).
+        df: DataFrame with numerical columns.
+        numerical_cols: List of columns to normalize.
+        scaler: Pre-fitted StandardScaler (optional).
 
     Returns:
-        Tupla de (DataFrame con columnas normalizadas, scaler ajustado).
+        Tuple of (DataFrame with normalized columns, fitted scaler).
     """
-    # Filtrar a columnas que existen en el DataFrame
+    # Filter to columns that exist in the DataFrame
     cols_present = [c for c in numerical_cols if c in df.columns]
 
     if not cols_present:
-        logger.warning("Ninguna columna numérica encontrada para normalizar")
+        logger.warning("No numerical column found to normalize")
         return df, scaler or StandardScaler()
 
     if scaler is None:
         scaler = StandardScaler()
         df[cols_present] = scaler.fit_transform(df[cols_present])
-        logger.info("Scaler ajustado y aplicado a %d columnas", len(cols_present))
+        logger.info("Scaler fitted and applied to %d columns", len(cols_present))
     else:
         df[cols_present] = scaler.transform(df[cols_present])
-        logger.info("Scaler aplicado a %d columnas", len(cols_present))
+        logger.info("Scaler applied to %d columns", len(cols_present))
 
     return df, scaler
 
@@ -143,32 +143,32 @@ def build_feature_matrix(
     encoders: dict[str, LabelEncoder] | None = None,
     scaler: StandardScaler | None = None,
 ) -> tuple[pd.DataFrame, dict[str, LabelEncoder], StandardScaler]:
-    """Construye la matriz de features completa para modelos tabulares.
+    """Build the full feature matrix for tabular models.
 
-    Pipeline: features temporales → codificación categórica → normalización.
+    Pipeline: temporal features → categorical encoding → normalization.
 
     Args:
-        df: DataFrame preprocesado.
-        config: Diccionario de configuración con sección 'features'.
-        encoders: Encoders pre-ajustados (para val/test).
-        scaler: Scaler pre-ajustado (para val/test).
+        df: Preprocessed DataFrame.
+        config: Configuration dictionary with a 'features' section.
+        encoders: Pre-fitted encoders (for val/test).
+        scaler: Pre-fitted scaler (for val/test).
 
     Returns:
-        Tupla de (DataFrame con features, encoders, scaler).
+        Tuple of (DataFrame with features, encoders, scaler).
     """
     features_config = config.get("features", {})
 
-    # 1. Features temporales
+    # 1. Temporal features
     df = add_temporal_features(df)
 
-    # 2. Codificación categórica
+    # 2. Categorical encoding
     categorical_cols = features_config.get("categorical", [])
     if categorical_cols:
         df, encoders = encode_categoricals(df, categorical_cols, encoders)
 
-    # 3. Normalización
+    # 3. Normalization
     numerical_cols = features_config.get("numerical", [])
-    # Añadir features temporales a la normalización
+    # Add temporal features to the normalization
     numerical_cols = numerical_cols + [
         "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month",
     ]
