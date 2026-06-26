@@ -1,6 +1,6 @@
-"""Fixtures compartidos para todos los tests del proyecto.
+"""Shared fixtures for all project tests.
 
-Proporciona datos de ejemplo y configuraciones de prueba reutilizables.
+Provides reusable example data and test configurations.
 """
 
 from pathlib import Path
@@ -11,13 +11,13 @@ import pytest
 
 @pytest.fixture
 def project_root() -> Path:
-    """Devuelve la ruta raíz del proyecto."""
+    """Return the project root path."""
     return Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
 def sample_config() -> dict:
-    """Devuelve una configuración mínima para tests."""
+    """Return a minimal configuration for tests."""
     return {
         "data": {
             "raw_dir": "data/raw",
@@ -46,7 +46,7 @@ def sample_config() -> dict:
 
 @pytest.fixture
 def sample_flights_df() -> pd.DataFrame:
-    """Devuelve un DataFrame pequeño simulando datos de vuelos."""
+    """Return a small DataFrame simulating flight data."""
     return pd.DataFrame({
         "FlightDate": pd.to_datetime(["2018-01-01"] * 10),
         "Airline": ["AA", "UA", "DL", "AA", "UA", "DL", "AA", "UA", "DL", "AA"],

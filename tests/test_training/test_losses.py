@@ -1,14 +1,14 @@
-"""Tests para las pérdidas, especialmente la combinación multi-tarea de W2.
+"""Tests for the losses, especially the W2 multi-task combination.
 
-Cubre:
-    - ``MultiTaskLoss`` con shapes correctas, pesos por componente, gradientes
-      y robustez ante shapes inválidas.
-    - Compatibilidad de ``WeightedHuberLoss`` con targets multi-canal
-      (debe slicear al canal 0 = ArrDelay).
-    - ``compute_node_targets_multi_channel`` produce los 3 canales en
-      el rango esperado.
-    - ``compute_bce_classification_metrics`` y la integración en
-      ``compute_unified_metrics`` cuando se pasan logits BCE.
+Covers:
+    - ``MultiTaskLoss`` with correct shapes, per-component weights,
+      gradients and robustness to invalid shapes.
+    - Compatibility of ``WeightedHuberLoss`` with multi-channel targets
+      (it must slice to channel 0 = ArrDelay).
+    - ``compute_node_targets_multi_channel`` produces the 3 channels in the
+      expected range.
+    - ``compute_bce_classification_metrics`` and its integration in
+      ``compute_unified_metrics`` when BCE logits are passed.
 """
 
 from __future__ import annotations
@@ -38,13 +38,13 @@ from src.training.losses import MultiTaskLoss, WeightedHuberLoss
 
 @pytest.fixture
 def multi_task_batch():
-    """Batch sintético [N=8, H=5, 3] (pred + target) sin NaN."""
+    """Synthetic batch [N=8, H=5, 3] (pred + target) without NaN."""
     torch.manual_seed(42)
     n, h = 8, 5
     pred = torch.randn(n, h, 3)
     arr_target = torch.randn(n, h) * 10
     dep_target = torch.randn(n, h) * 8
-    pct_target = torch.rand(n, h)  # ya en [0, 1]
+    pct_target = torch.rand(n, h)  # already in [0, 1]
     target = torch.stack([arr_target, dep_target, pct_target], dim=-1)
     return pred, target
 
@@ -56,17 +56,17 @@ def airport_map():
 
 @pytest.fixture
 def small_window_df():
-    """Tres aeropuertos, distintos retrasos para canales claramente distintos."""
+    """Three airports, different delays for clearly distinct channels."""
     return pd.DataFrame([
-        # AAA: 4 vuelos, 3 delayed (>= 15 min), arr_mean = 25
+        # AAA: 4 flights, 3 delayed (>= 15 min), arr_mean = 25
         {"Dest": "AAA", "ArrDelay": 30.0, "DepDelay": 20.0},
         {"Dest": "AAA", "ArrDelay": 20.0, "DepDelay": 10.0},
         {"Dest": "AAA", "ArrDelay": 25.0, "DepDelay": 15.0},
         {"Dest": "AAA", "ArrDelay": 25.0, "DepDelay": 12.0},
-        # BBB: 2 vuelos, 0 delayed, arr_mean = 5
+        # BBB: 2 flights, 0 delayed, arr_mean = 5
         {"Dest": "BBB", "ArrDelay": 5.0, "DepDelay": 2.0},
         {"Dest": "BBB", "ArrDelay": 5.0, "DepDelay": 3.0},
-        # CCC: 0 vuelos en la ventana → todo cero
+        # CCC: 0 flights in the window → all zeros
     ])
 
 
@@ -74,13 +74,13 @@ def small_window_df():
 
 
 class TestComputeNodeTargetsMultiChannel:
-    """El nuevo target builder: [N, 3]."""
+    """The new target builder: [N, 3]."""
 
     def test_shape_and_channels(self, small_window_df, airport_map):
         out = compute_node_targets_multi_channel(small_window_df, airport_map)
         assert out.shape == (3, NUM_TARGET_CHANNELS)
 
-        # AAA: arr=25, dep=14.25, pct = 4/4 = 1.0 (todos >= 15 min)
+        # AAA: arr=25, dep=14.25, pct = 4/4 = 1.0 (all >= 15 min)
         assert out[0, TARGET_CHANNEL_ARR_DELAY].item() == pytest.approx(25.0)
         assert out[0, TARGET_CHANNEL_DEP_DELAY].item() == pytest.approx(14.25)
         assert out[0, TARGET_CHANNEL_PCT_DELAYED].item() == pytest.approx(1.0)
@@ -90,24 +90,24 @@ class TestComputeNodeTargetsMultiChannel:
         assert out[1, TARGET_CHANNEL_DEP_DELAY].item() == pytest.approx(2.5)
         assert out[1, TARGET_CHANNEL_PCT_DELAYED].item() == pytest.approx(0.0)
 
-        # CCC: sin vuelos, todo 0.
+        # CCC: no flights, all 0.
         assert torch.allclose(out[2], torch.zeros(3))
 
     def test_arr_channel_matches_single(self, small_window_df, airport_map):
-        """El canal arr_delay debe coincidir bit-a-bit con la versión 1D."""
+        """The arr_delay channel must match the 1D version bit-for-bit."""
         single = compute_node_targets(small_window_df, airport_map)
         multi = compute_node_targets_multi_channel(small_window_df, airport_map)
         assert torch.allclose(single, multi[:, TARGET_CHANNEL_ARR_DELAY])
 
     def test_pct_uses_threshold(self, small_window_df, airport_map):
-        """Threshold más alto reduce el porcentaje delayed."""
+        """A higher threshold reduces the delayed percentage."""
         out_15 = compute_node_targets_multi_channel(
             small_window_df, airport_map, delay_threshold=15.0,
         )
         out_30 = compute_node_targets_multi_channel(
             small_window_df, airport_map, delay_threshold=30.0,
         )
-        # AAA con threshold 30: solo 1 vuelo (arr=30) cumple → 0.25.
+        # AAA with threshold 30: only 1 flight (arr=30) qualifies → 0.25.
         assert out_15[0, TARGET_CHANNEL_PCT_DELAYED].item() == pytest.approx(1.0)
         assert out_30[0, TARGET_CHANNEL_PCT_DELAYED].item() == pytest.approx(0.25)
 
@@ -122,7 +122,7 @@ class TestComputeNodeTargetsMultiChannel:
 
 
 class TestMultiTaskLoss:
-    """Combinación Huber(arr) + aux·Huber(dep) + bce·BCE(pct)."""
+    """Combination Huber(arr) + aux·Huber(dep) + bce·BCE(pct)."""
 
     def test_returns_finite_scalar(self, multi_task_batch):
         pred, target = multi_task_batch
@@ -138,11 +138,11 @@ class TestMultiTaskLoss:
         for k in ("arr_huber", "dep_huber", "pct_bce", "total"):
             assert k in comps
             assert np.isfinite(comps[k])
-        # Total registrado coincide con el valor backward-able (a precisión float).
+        # The recorded total matches the backward-able value (to float precision).
         assert comps["total"] == pytest.approx(loss.item(), rel=1e-5)
 
     def test_zero_aux_weight_ignores_dep(self, multi_task_batch):
-        """Con aux_weight=0, cambiar el target dep no afecta a la loss."""
+        """With aux_weight=0, changing the dep target does not affect the loss."""
         pred, target = multi_task_batch
         criterion = MultiTaskLoss(aux_weight=0.0, bce_weight=0.0)
         loss_a = criterion(pred, target).item()
@@ -165,23 +165,23 @@ class TestMultiTaskLoss:
         assert loss_a == pytest.approx(loss_b, rel=1e-5)
 
     def test_gradients_flow_through_all_channels(self, multi_task_batch):
-        """El backward debe propagar gradiente a los 3 canales del pred."""
+        """The backward must propagate gradient to the 3 channels of pred."""
         pred, target = multi_task_batch
         pred = pred.clone().requires_grad_(True)
         loss = MultiTaskLoss()(pred, target)
         loss.backward()
-        # Cada canal recibe gradiente no nulo (aleatoriedad del fixture
-        # garantiza que el target es distinto del pred en cada canal).
+        # Each channel receives a non-zero gradient (the fixture's
+        # randomness guarantees the target differs from pred in each channel).
         for c in range(3):
             assert pred.grad[..., c].abs().sum() > 0, (
-                f"Sin gradiente en canal {c}"
+                f"No gradient in channel {c}"
             )
 
     def test_horizon_weights_emphasis(self, multi_task_batch):
-        """Subir el peso del último horizonte aumenta su contribución."""
+        """Raising the last horizon's weight increases its contribution."""
         pred, target = multi_task_batch
         h = pred.shape[1]
-        # Misma magnitud en todos los horizontes con un weight extremo.
+        # Same magnitude across all horizons with an extreme weight.
         emphasised = MultiTaskLoss(
             horizon_weights=[1.0] * (h - 1) + [10.0],
             aux_weight=0.0, bce_weight=0.0,
@@ -191,8 +191,8 @@ class TestMultiTaskLoss:
         )
         loss_e = emphasised(pred, target).item()
         loss_f = flat(pred, target).item()
-        # No es trivial predecir cuál es mayor sin saber el signo del
-        # error, pero ambas deben ser positivas y distintas.
+        # It is not trivial to predict which is larger without knowing the
+        # sign of the error, but both must be positive and different.
         assert loss_e != pytest.approx(loss_f, rel=1e-3)
         assert loss_e > 0 and loss_f > 0
 
@@ -204,26 +204,26 @@ class TestMultiTaskLoss:
             criterion(torch.randn(8, 5, 3), torch.randn(8, 5))
 
     def test_rejects_zero_total_weight(self):
-        with pytest.raises(ValueError, match="al menos uno"):
+        with pytest.raises(ValueError, match="at least one"):
             MultiTaskLoss(main_weight=0.0, aux_weight=0.0, bce_weight=0.0)
 
 
-# -- WeightedHuberLoss tolerancia a target multi-canal ---------------------
+# -- WeightedHuberLoss tolerance to multi-channel target --------------------
 
 
 class TestSingleTaskLossTolerantToMultiChannelTarget:
-    """Si target llega [N, H, 3] y pred [N, H], slice al canal 0."""
+    """If target arrives [N, H, 3] and pred [N, H], slice to channel 0."""
 
     def test_huber_slices_arr_channel(self):
         torch.manual_seed(0)
         pred = torch.randn(8, 5)
         target_arr = torch.randn(8, 5)
-        target_dep = torch.randn(8, 5) * 100.0  # ruido
+        target_dep = torch.randn(8, 5) * 100.0  # noise
         target_pct = torch.rand(8, 5)
         target_3d = torch.stack([target_arr, target_dep, target_pct], dim=-1)
 
         loss = WeightedHuberLoss()
-        # 2D target equivalente al canal 0 del 3D.
+        # 2D target equivalent to channel 0 of the 3D one.
         loss_2d = loss(pred, target_arr).item()
         loss_3d = loss(pred, target_3d).item()
         assert loss_2d == pytest.approx(loss_3d, rel=1e-5)
@@ -233,10 +233,10 @@ class TestSingleTaskLossTolerantToMultiChannelTarget:
 
 
 class TestBCEClassificationMetrics:
-    """Métricas derivadas del head BCE (sigmoid + threshold)."""
+    """Metrics derived from the BCE head (sigmoid + threshold)."""
 
     def test_perfect_predictions(self):
-        # Logits muy positivos → prob >> 0.5; targets ya >= 0.5 → todos TP.
+        # Very positive logits → prob >> 0.5; targets already >= 0.5 → all TP.
         logits = np.array([5.0, 5.0, 5.0])
         targets = np.array([0.9, 0.7, 0.51])
         m = compute_bce_classification_metrics(logits, targets)
@@ -246,31 +246,31 @@ class TestBCEClassificationMetrics:
         assert m["bce_f1"] == pytest.approx(1.0)
 
     def test_perfect_negative_predictions(self):
-        # Logits muy negativos → prob ~ 0; targets pequeños → todos TN.
+        # Very negative logits → prob ~ 0; small targets → all TN.
         logits = np.array([-5.0, -5.0, -5.0])
         targets = np.array([0.1, 0.0, 0.49])
         m = compute_bce_classification_metrics(logits, targets)
         assert m["bce_accuracy"] == 1.0
-        # precision/recall sin positives → 0/1 fallback en el helper.
+        # precision/recall without positives → 0/1 fallback in the helper.
         assert m["bce_precision"] == 0.0
         assert m["bce_recall"] == 0.0
 
     def test_threshold_tradeoff(self):
-        """Bajar bce_threshold sube recall a costa de precision."""
+        """Lowering bce_threshold raises recall at the cost of precision."""
         logits = np.array([1.0, -0.5, 2.0, -1.5])  # probs ~ 0.73, 0.38, 0.88, 0.18
         targets = np.array([0.9, 0.6, 0.9, 0.1])
-        # threshold alto → menos predichos positivos
+        # high threshold → fewer predicted positives
         high = compute_bce_classification_metrics(logits, targets, bce_threshold=0.7)
-        # threshold bajo → más predichos positivos → más recall
+        # low threshold → more predicted positives → more recall
         low = compute_bce_classification_metrics(logits, targets, bce_threshold=0.3)
         assert low["bce_recall"] >= high["bce_recall"]
 
 
-# -- compute_unified_metrics integración -----------------------------------
+# -- compute_unified_metrics integration -----------------------------------
 
 
 class TestComputeUnifiedMetricsWithBCE:
-    """Las claves bce_* se añaden iff se pasan pct_logits y pct_targets."""
+    """The bce_* keys are added iff pct_logits and pct_targets are passed."""
 
     def test_adds_bce_keys_when_provided(self):
         preds = np.array([10.0, 20.0, 5.0])

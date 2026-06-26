@@ -1,4 +1,4 @@
-"""Tests de las agregaciones del export de Power BI (scripts.export_powerbi)."""
+"""Tests for the Power BI export aggregations (scripts.export_powerbi)."""
 
 import numpy as np
 import pandas as pd
@@ -35,9 +35,9 @@ def _raw_flights():
 
 def test_build_flight_frame_overnight_and_network_filter():
     fr = build_flight_frame(_raw_flights(), ["A", "B"])
-    assert len(fr) == 5  # todos dentro de la red A/B
+    assert len(fr) == 5  # all within the A/B network
     overnight = fr[fr["CRSArrTime"] == 100].iloc[0]
-    # Llegada 01:00 con salida 23:30 -> la llegada cae al día siguiente.
+    # Arrival 01:00 with departure 23:30 -> the arrival falls on the next day.
     assert overnight["arr_ts_hour"] == pd.Timestamp("2019-10-02 01:00:00")
     assert overnight["dep_ts_hour"] == pd.Timestamp("2019-10-01 23:00:00")
 
@@ -46,7 +46,7 @@ def test_fact_airport_hour_counts_and_cancellations():
     fr = build_flight_frame(_raw_flights(), ["A", "B"])
     fact = build_fact_airport_hour(fr, seats_per_flight=100)
 
-    # Llegadas a B el 2019-10-01 10:00 -> 3 programadas (2 operadas + 1 cancelada).
+    # Arrivals at B on 2019-10-01 10:00 -> 3 scheduled (2 operated + 1 cancelled).
     b10 = fact[
         (fact.airport_code == "B")
         & (fact.ts_hour == pd.Timestamp("2019-10-01 10:00:00"))
@@ -54,11 +54,11 @@ def test_fact_airport_hour_counts_and_cancellations():
     assert b10["sched_arr"] == 3
     assert b10["arr_operated"] == 2
     assert b10["arr_cancelled"] == 1
-    assert abs(b10["arr_delay_mean"] - 12.5) < 1e-6   # (20+5)/2, NaN excluido
+    assert abs(b10["arr_delay_mean"] - 12.5) < 1e-6   # (20+5)/2, NaN excluded
     assert b10["arr_del15"] == 1
     assert b10["est_arr_passengers"] == 300           # 3 * 100
 
-    # Salidas de A a las 08:00 -> 3 programadas (800, 830, 800-cancelada).
+    # Departures from A at 08:00 -> 3 scheduled (800, 830, 800-cancelled).
     a08 = fact[
         (fact.airport_code == "A")
         & (fact.ts_hour == pd.Timestamp("2019-10-01 08:00:00"))
@@ -94,5 +94,5 @@ def test_enrich_predictions_attaches_volume_and_expected():
         }
     )
     out = enrich_predictions(preds, fact, baseline)
-    assert out.iloc[0]["sched_arr"] == 3                      # B@10:00 -> 3 programadas
+    assert out.iloc[0]["sched_arr"] == 3                      # B@10:00 -> 3 scheduled
     assert out.iloc[0]["expected_delayed_flights"] == 1.5     # 0.5 * 3

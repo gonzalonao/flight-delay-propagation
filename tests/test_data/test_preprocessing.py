@@ -1,4 +1,4 @@
-"""Tests para el módulo de preprocesamiento."""
+"""Tests for the preprocessing module."""
 
 import pandas as pd
 import pytest
@@ -12,33 +12,33 @@ from src.data.preprocessing import (
 
 
 class TestCleanFlights:
-    """Tests para la función clean_flights."""
+    """Tests for the clean_flights function."""
 
     def test_removes_cancelled(self, sample_flights_df):
-        """Verifica que elimina vuelos cancelados."""
+        """Check that it removes cancelled flights."""
         df = sample_flights_df.copy()
         df.loc[0, "Cancelled"] = True
         result = clean_flights(df)
         assert len(result) == len(df) - 1
 
     def test_removes_null_arr_delay(self, sample_flights_df):
-        """Verifica que elimina filas sin ArrDelay."""
+        """Check that it removes rows without ArrDelay."""
         df = sample_flights_df.copy()
         df.loc[0, "ArrDelay"] = None
         result = clean_flights(df)
         assert len(result) == len(df) - 1
 
     def test_converts_date(self, sample_flights_df):
-        """Verifica que convierte FlightDate a datetime."""
+        """Check that it converts FlightDate to datetime."""
         result = clean_flights(sample_flights_df)
         assert pd.api.types.is_datetime64_any_dtype(result["FlightDate"])
 
 
 class TestEncodeTime:
-    """Tests para la función encode_time."""
+    """Tests for the encode_time function."""
 
     def test_extracts_hour(self, sample_flights_df):
-        """Verifica que extrae la hora de CRSDepTime correctamente."""
+        """Check that it extracts the hour from CRSDepTime correctly."""
         result = encode_time(sample_flights_df)
         assert "Hour" in result.columns
         assert result.loc[0, "Hour"] == 8   # 800 → 8
@@ -46,10 +46,10 @@ class TestEncodeTime:
 
 
 class TestFillDelayNulls:
-    """Tests para la función fill_delay_nulls."""
+    """Tests for the fill_delay_nulls function."""
 
     def test_fills_with_zero(self):
-        """Verifica que rellena nulos en columnas de retraso con 0."""
+        """Check that it fills delay-column nulls with 0."""
         df = pd.DataFrame({"DepDelay": [5.0, None, 3.0], "Other": [1, 2, 3]})
         result = fill_delay_nulls(df)
         assert result["DepDelay"].isna().sum() == 0
@@ -57,12 +57,12 @@ class TestFillDelayNulls:
 
 
 class TestFilterTopAirports:
-    """Tests para la función filter_top_airports."""
+    """Tests for the filter_top_airports function."""
 
     def test_filters_correctly(self, sample_flights_df):
-        """Verifica que filtra a los aeropuertos con más tráfico."""
+        """Check that it filters to the busiest airports."""
         df_filtered, airports = filter_top_airports(sample_flights_df, top_n=3)
         assert len(airports) == 3
-        # Todos los vuelos deben tener origen y destino en top airports
+        # All flights must have origin and destination in the top airports
         assert df_filtered["Origin"].isin(airports).all()
         assert df_filtered["Dest"].isin(airports).all()

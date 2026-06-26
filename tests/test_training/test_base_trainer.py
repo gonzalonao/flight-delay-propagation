@@ -1,15 +1,15 @@
-"""Tests para BaseTrainer y los wrappers subclase (W4.3).
+"""Tests for BaseTrainer and the subclass wrappers (W4.3).
 
-Verifican que tras el colapso de la lógica común:
+Verify that after collapsing the shared logic:
 
-- :class:`BaseTrainer` ejecuta el ciclo train/val/early-stop/checkpoint.
-- :class:`Trainer` (tabular), :class:`GraphTrainer` y
-  :class:`SequenceGraphTrainer` preservan su API pública histórica
+- :class:`BaseTrainer` runs the train/val/early-stop/checkpoint cycle.
+- :class:`Trainer` (tabular), :class:`GraphTrainer` and
+  :class:`SequenceGraphTrainer` preserve their historical public API
   (``train_loader``, ``train_graphs``, ``train_sequences``).
-- La máscara de nodos activos se respeta y los batches sin nodos
-  activos se ignoran sin romper el promedio de pérdida.
-- ``_align_for_val`` extrae el canal de ArrDelay cuando el modelo
-  emite salidas multi-tarea ``[N, H, 3]``.
+- The active-node mask is respected and batches without active nodes are
+  ignored without breaking the loss average.
+- ``_align_for_val`` extracts the ArrDelay channel when the model emits
+  multi-task outputs ``[N, H, 3]``.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from src.training.trainer import Trainer  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Fixtures sintéticos
+# Synthetic fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -71,7 +71,7 @@ class _TinyDense(nn.Module):
 
 
 class _TinyGNN(nn.Module):
-    """Modelo de grafos minimal sin GCN: ignora aristas, mapea features."""
+    """Minimal graph model without GCN: ignores edges, maps features."""
 
     def __init__(self, in_dim: int = 3, out_dim: int = 1) -> None:
         super().__init__()
@@ -84,7 +84,7 @@ class _TinyGNN(nn.Module):
 
 
 class _TinySeqGNN(nn.Module):
-    """Modelo secuencial minimal: promedia features del último grafo."""
+    """Minimal sequence model: averages the last graph's features."""
 
     def __init__(self, in_dim: int = 3, out_dim: int = 1) -> None:
         super().__init__()
@@ -105,7 +105,7 @@ class _TinySeqGNN(nn.Module):
 
 
 class TestBaseTrainerCoreLoop:
-    """Comportamiento del bucle común a través de las tres subclases."""
+    """Behavior of the shared loop across the three subclasses."""
 
     def test_tabular_trainer_runs_and_history_shapes(self, tmp_path: Path):
         loader = _make_tabular_loader()
@@ -155,7 +155,7 @@ class TestBaseTrainerCoreLoop:
 
 
 class TestActiveMaskHandling:
-    """La máscara de nodos activos se aplica y los batches vacíos se omiten."""
+    """The active-node mask is applied and empty batches are skipped."""
 
     def test_graphs_with_zero_active_mask_are_skipped(self):
         good = _make_graph()
@@ -171,7 +171,7 @@ class TestActiveMaskHandling:
             device=torch.device("cpu"),
         )
         loss = trainer.train_epoch(graphs)
-        # Solo el grafo "good" contribuye; el promedio se calcula sobre n=1.
+        # Only the "good" graph contributes; the average is over n=1.
         assert isinstance(loss, float)
         assert loss >= 0
 
@@ -189,12 +189,12 @@ class TestActiveMaskHandling:
             criterion=nn.MSELoss(),
             device=torch.device("cpu"),
         )
-        # max(n_batches, 1) evita la división por cero; debe devolver 0.0.
+        # max(n_batches, 1) avoids division by zero; must return 0.0.
         assert trainer.train_epoch(graphs) == 0.0
 
 
 class TestValAlignment:
-    """``_align_for_val`` extrae canal 0 cuando hay multi-tarea."""
+    """``_align_for_val`` extracts channel 0 when multi-task."""
 
     def test_align_for_val_slices_channel_0_when_3d(self):
         pred = torch.randn(6, 5, 3)
@@ -214,12 +214,12 @@ class TestValAlignment:
 
 
 class TestEarlyStoppingPath:
-    """``fit`` corta antes del max de épocas si val_loss no mejora."""
+    """``fit`` stops before the max epochs if val_loss does not improve."""
 
     def test_early_stops_with_short_patience(self, tmp_path: Path):
         loader = _make_tabular_loader()
         model = _TinyDense()
-        # LR=0 ⇒ ningún parámetro cambia ⇒ val_loss constante ⇒ early stop.
+        # LR=0 ⇒ no parameter changes ⇒ constant val_loss ⇒ early stop.
         opt = torch.optim.SGD(model.parameters(), lr=0.0)
         trainer = Trainer(
             model=model, optimizer=opt,
@@ -235,7 +235,7 @@ class TestEarlyStoppingPath:
 
 
 class TestSubclassApiBackcompat:
-    """Las subclases mantienen los nombres de parámetro históricos."""
+    """The subclasses keep the historical parameter names."""
 
     def test_trainer_fit_accepts_train_loader_kwarg(self):
         loader = _make_tabular_loader(n=8, batch_size=4)
@@ -275,7 +275,7 @@ class TestSubclassApiBackcompat:
 
 
 class TestBaseTrainerDirectInstantiation:
-    """``BaseTrainer`` requiere implementar ``_forward_batch``."""
+    """``BaseTrainer`` requires implementing ``_forward_batch``."""
 
     def test_raises_when_forward_batch_not_overridden(self):
         model = _TinyDense()

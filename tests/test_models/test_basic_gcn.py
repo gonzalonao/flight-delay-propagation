@@ -1,4 +1,4 @@
-"""Tests para el modelo BasicGCN y el graph_builder."""
+"""Tests for the BasicGCN model and the graph_builder."""
 
 import numpy as np
 import pandas as pd
@@ -21,19 +21,19 @@ from src.models.basic_gcn import BasicGCN
 
 @pytest.fixture
 def sample_airports():
-    """Lista de aeropuertos de ejemplo."""
+    """Example airport list."""
     return ["ATL", "DFW", "LAX", "ORD"]
 
 
 @pytest.fixture
 def airport_map(sample_airports):
-    """Mapeo de aeropuertos a índices."""
+    """Airport-to-index mapping."""
     return build_airport_mapping(sample_airports)
 
 
 @pytest.fixture
 def sample_flight_df():
-    """DataFrame de vuelos sintético para testing."""
+    """Synthetic flight DataFrame for testing."""
     np.random.seed(42)
     n = 500
     airports = ["ATL", "DFW", "LAX", "ORD"]
@@ -49,14 +49,14 @@ def sample_flight_df():
         "CRSDepTime": np.random.choice(range(600, 2200, 100), n),
         "Hour": np.random.randint(6, 22, n),
     })
-    # Evitar rutas de un aeropuerto a sí mismo
+    # Avoid routes from an airport to itself
     mask = df["Origin"] != df["Dest"]
     return df[mask].reset_index(drop=True)
 
 
 @pytest.fixture
 def simple_graph():
-    """Grafo PyG simple para tests del modelo."""
+    """Simple PyG graph for the model tests."""
     num_nodes = 4
     input_dim = 6
     x = torch.randn(num_nodes, input_dim)
@@ -65,36 +65,36 @@ def simple_graph():
     return x, edge_index
 
 
-# ── Tests del modelo BasicGCN ────────────────────────────────────────
+# ── BasicGCN model tests ─────────────────────────────────────────────
 
 
 class TestBasicGCN:
-    """Tests para la arquitectura BasicGCN."""
+    """Tests for the BasicGCN architecture."""
 
     def test_output_shape(self, simple_graph):
-        """Verifica que la salida tiene shape correcto."""
+        """Check that the output has the correct shape."""
         x, edge_index = simple_graph
         model = BasicGCN(input_dim=6, hidden_channels=16, num_layers=2)
         out = model(x, edge_index)
         assert out.shape == (4, 1)
 
     def test_output_shape_with_edge_attr(self, simple_graph):
-        """Verifica output con edge_attr (1D legado y 2D multi-feature)."""
+        """Check output with edge_attr (1D legacy and 2D multi-feature)."""
         x, edge_index = simple_graph
         model = BasicGCN(input_dim=6, hidden_channels=16, num_layers=2)
 
-        # 1D (legado)
+        # 1D (legacy)
         edge_attr_1d = torch.ones(edge_index.shape[1])
         out = model(x, edge_index, edge_attr=edge_attr_1d)
         assert out.shape == (4, 1)
 
-        # 2D multi-feature: GCN extrae la primera columna como peso
+        # 2D multi-feature: GCN extracts the first column as the weight
         edge_attr_2d = torch.ones(edge_index.shape[1], 5)
         out = model(x, edge_index, edge_attr=edge_attr_2d)
         assert out.shape == (4, 1)
 
     def test_gradients_flow(self, simple_graph):
-        """Verifica que los gradientes fluyen correctamente."""
+        """Check that the gradients flow correctly."""
         x, edge_index = simple_graph
         model = BasicGCN(input_dim=6, hidden_channels=16, num_layers=2)
         out = model(x, edge_index)
@@ -103,10 +103,10 @@ class TestBasicGCN:
 
         for name, param in model.named_parameters():
             if param.requires_grad:
-                assert param.grad is not None, f"Sin gradiente en {name}"
+                assert param.grad is not None, f"No gradient in {name}"
 
     def test_different_configs(self):
-        """Verifica que distintas configuraciones funcionan."""
+        """Check that different configurations work."""
         x = torch.randn(4, 6)
         edge_index = torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long)
 
@@ -122,7 +122,7 @@ class TestBasicGCN:
                 assert out.shape == (4, 1)
 
     def test_eval_mode_deterministic(self, simple_graph):
-        """En modo eval, el output debe ser determinista."""
+        """In eval mode, the output must be deterministic."""
         x, edge_index = simple_graph
         model = BasicGCN(input_dim=6, hidden_channels=16, num_layers=2)
         model.eval()
@@ -132,23 +132,23 @@ class TestBasicGCN:
         assert torch.allclose(out1, out2)
 
 
-# ── Tests del graph_builder ──────────────────────────────────────────
+# ── graph_builder tests ──────────────────────────────────────────────
 
 
 class TestGraphBuilder:
-    """Tests para la construcción de grafos."""
+    """Tests for graph construction."""
 
     def test_airport_mapping(self, sample_airports):
-        """Verifica que el mapeo es correcto y ordenado."""
+        """Check that the mapping is correct and ordered."""
         mapping = build_airport_mapping(sample_airports)
         assert len(mapping) == 4
-        # Debe estar ordenado alfabéticamente
+        # Must be sorted alphabetically
         assert mapping["ATL"] < mapping["DFW"]
         assert mapping["DFW"] < mapping["LAX"]
         assert mapping["LAX"] < mapping["ORD"]
 
     def test_edge_index_shape(self, sample_flight_df, airport_map):
-        """Verifica que edge_index y edge_attr_static tienen shape coherente."""
+        """Check that edge_index and edge_attr_static have coherent shapes."""
         edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
@@ -156,11 +156,11 @@ class TestGraphBuilder:
         assert edge_index.shape[1] == edge_attr_static.shape[0]
         assert edge_attr_static.shape[1] == 3
         assert len(edge_pairs) == edge_index.shape[1]
-        # Bidireccional: num_edges debe ser par
+        # Bidirectional: num_edges must be even
         assert edge_index.shape[1] % 2 == 0
 
     def test_edge_attr_static_normalized(self, sample_flight_df, airport_map):
-        """Las features estáticas (count, air_time, distance) están en [0, 1]."""
+        """The static features (count, air_time, distance) are in [0, 1]."""
         _, edge_attr_static, _ = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
@@ -168,7 +168,7 @@ class TestGraphBuilder:
         assert edge_attr_static.min() >= 0.0
 
     def test_min_flights_filter(self, sample_flight_df, airport_map):
-        """Con min_flights alto, deben crearse menos aristas."""
+        """With a high min_flights, fewer edges must be created."""
         _, attrs_low, _ = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
@@ -178,25 +178,25 @@ class TestGraphBuilder:
         assert attrs_high.shape[0] <= attrs_low.shape[0]
 
     def test_node_features_shape(self, sample_flight_df, airport_map):
-        """Verifica shape de features por nodo."""
+        """Check the per-node feature shape."""
         features = compute_node_features(
             sample_flight_df, airport_map, delay_threshold=15.0
         )
         assert features.shape == (len(airport_map), 6)
-        # No debe haber NaN
+        # There must be no NaN
         assert not torch.isnan(features).any()
 
     def test_node_targets_continuous(self, sample_flight_df, airport_map):
-        """Verifica que los targets son continuos (minutos de retraso)."""
+        """Check that the targets are continuous (delay minutes)."""
         targets = compute_node_targets(sample_flight_df, airport_map)
         assert targets.shape == (len(airport_map),)
-        # Targets deben ser continuos (no solo 0/1)
+        # Targets must be continuous (not just 0/1)
         assert not torch.isnan(targets).any()
-        # Deben ser valores reales en minutos (no binarios)
+        # They must be real values in minutes (not binary)
         assert targets.dtype == torch.float32
 
     def test_temporal_graphs_created(self, sample_flight_df, airport_map):
-        """Verifica que se crean snapshots temporales."""
+        """Check that temporal snapshots are created."""
         edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
@@ -205,9 +205,9 @@ class TestGraphBuilder:
             edge_attr_static, edge_pairs,
             window_hours=6, delay_threshold=15.0,
         )
-        # Con 5 días de datos y ventanas de 6h, debería haber múltiples grafos
+        # With 5 days of data and 6h windows, there should be multiple graphs
         assert len(graphs) > 0
-        # Cada grafo debe tener los atributos esperados
+        # Each graph must have the expected attributes
         g = graphs[0]
         assert hasattr(g, "x")
         assert hasattr(g, "edge_index")
@@ -215,8 +215,8 @@ class TestGraphBuilder:
         assert hasattr(g, "active_mask")
 
     def test_split_graphs_proportions(self):
-        """Verifica las proporciones del split temporal."""
-        # Crear lista mock de grafos
+        """Check the proportions of the temporal split."""
+        # Create a mock list of graphs
         from torch_geometric.data import Data
         graphs = [Data(x=torch.randn(4, 6)) for _ in range(100)]
 

@@ -1,18 +1,18 @@
-"""Smoke tests de integración para los 5 modelos del registro.
+"""Integration smoke tests for the 5 models in the registry.
 
-Ejecuta un forward + backward sobre cada modelo con datos sintéticos
-mínimos (5 nodos, 20 features, 5 horizontes, 6 snapshots de secuencia).
-No carga datos reales — sólo valida que:
+Runs a forward + backward on each model with minimal synthetic data (5
+nodes, 20 features, 5 horizons, 6 sequence snapshots). Loads no real data —
+it only validates that:
 
-1. ``build_model`` instancia el modelo desde un config válido.
-2. El forward acepta los tensores con la forma documentada en el README.
-3. La loss devuelve un escalar finito.
-4. El backward no lanza NaN ni rompe ninguna capa.
-5. ``save_checkpoint`` + ``load_checkpoint`` con ``model_name`` validan
-   la arquitectura.
+1. ``build_model`` instantiates the model from a valid config.
+2. The forward accepts the tensors with the shape documented in the README.
+3. The loss returns a finite scalar.
+4. The backward does not produce NaN or break any layer.
+5. ``save_checkpoint`` + ``load_checkpoint`` with ``model_name`` validate
+   the architecture.
 
-Diseñado para correr en CPU en <5 s, sirve como red de seguridad para
-refactors de modelos, fábrica o trainer.
+Designed to run on CPU in <5 s, it serves as a safety net for refactors of
+models, factory or trainer.
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ from src.training.losses import MultiTaskLoss
 from src.utils.io import load_checkpoint, save_checkpoint
 
 # ---------------------------------------------------------------------------
-# Config canónica para los smoke tests. Pequeña, pero con todas las claves
-# que cualquier modelo del registro pueda necesitar.
+# Canonical config for the smoke tests. Small, but with all the keys any
+# model in the registry might need.
 # ---------------------------------------------------------------------------
 
 NUM_NODES = 5
@@ -48,7 +48,7 @@ SEQUENCE_LEN = 6
 
 
 def _make_config(model_name: str) -> dict:
-    """Devuelve un config mínimo válido para ``build_model``."""
+    """Return a minimal valid config for ``build_model``."""
     horizons = list(range(1, NUM_HORIZONS + 1))
     return {
         "model": {
@@ -77,7 +77,7 @@ def _make_config(model_name: str) -> dict:
                 "dropout": 0.1,
             },
             "seq2seq_gnn": {
-                # Rediseñado en W3: claves nuevas (hidden_dim,
+                # Redesigned in W3: new keys (hidden_dim,
                 # num_spatial_layers, num_temporal_layers).
                 "hidden_dim": 16,
                 "num_heads": 2,
@@ -93,18 +93,18 @@ def _make_config(model_name: str) -> dict:
 
 
 def _make_snapshot() -> Data:
-    """Crea un único snapshot PyG con node features y edge_attr.
+    """Create a single PyG snapshot with node features and edge_attr.
 
-    ``edge_attr`` se genera con ``torch.rand`` (uniforme en [0, 1)) para
-    que la columna 0 — usada por ``BasicGCN`` como ``edge_weight`` — sea
-    no-negativa. ``GCNConv`` normaliza con ``D^(-1/2) A D^(-1/2)``: pesos
-    negativos producen grados negativos, ``sqrt`` devuelve NaN y la loss
-    se rompe. En producción todas las features de arista de la columna 0
-    (``flight_count_norm``) son no-negativas por construcción, así que
-    el test refleja ese contrato.
+    ``edge_attr`` is generated with ``torch.rand`` (uniform in [0, 1)) so
+    that column 0 — used by ``BasicGCN`` as ``edge_weight`` — is
+    non-negative. ``GCNConv`` normalizes with ``D^(-1/2) A D^(-1/2)``:
+    negative weights produce negative degrees, ``sqrt`` returns NaN and the
+    loss breaks. In production all column-0 edge features
+    (``flight_count_norm``) are non-negative by construction, so the test
+    reflects that contract.
     """
     x = torch.randn(NUM_NODES, INPUT_DIM)
-    # Cadena dirigida 0→1→2→3→4 + 3 aristas extra para densidad mínima.
+    # Directed chain 0→1→2→3→4 + 3 extra edges for minimal density.
     edge_index = torch.tensor(
         [[0, 1, 2, 3, 0, 2, 4, 1],
          [1, 2, 3, 4, 2, 4, 0, 3]],
@@ -120,14 +120,14 @@ def _make_snapshot() -> Data:
 # ---------------------------------------------------------------------------
 
 def test_factory_rejects_unknown_model() -> None:
-    """``build_model`` debe fallar con un mensaje claro ante un nombre inválido."""
-    with pytest.raises(ValueError, match="Modelo no reconocido"):
-        build_model({"model": {"name": "no_existe"}}, input_dim=10)
+    """``build_model`` must fail with a clear message on an invalid name."""
+    with pytest.raises(ValueError, match="Unrecognized model"):
+        build_model({"model": {"name": "does_not_exist"}}, input_dim=10)
 
 
 @pytest.mark.parametrize("model_name", sorted({"dense_nn"}))
 def test_tabular_model_smoke(model_name: str) -> None:
-    """DenseNN: 1 forward + 1 backward sobre batch tabular."""
+    """DenseNN: 1 forward + 1 backward over a tabular batch."""
     config = _make_config(model_name)
     model = build_model(config, input_dim=INPUT_DIM)
     model.train()
@@ -140,20 +140,20 @@ def test_tabular_model_smoke(model_name: str) -> None:
     assert pred.shape == (batch_size,)
 
     loss = torch.nn.functional.mse_loss(pred, y)
-    assert torch.isfinite(loss), f"Loss no finita: {loss.item()}"
+    assert torch.isfinite(loss), f"Non-finite loss: {loss.item()}"
 
     loss.backward()
-    # Algún gradiente debe haberse propagado.
+    # Some gradient must have propagated.
     grads = [p.grad for p in model.parameters() if p.grad is not None]
-    assert grads, "Ningún parámetro recibió gradiente"
-    assert all(torch.isfinite(g).all() for g in grads), "Gradientes con NaN"
+    assert grads, "No parameter received a gradient"
+    assert all(torch.isfinite(g).all() for g in grads), "Gradients with NaN"
 
 
 @pytest.mark.parametrize(
     "model_name", sorted(GRAPH_MODELS - SEQUENCE_MODELS),
 )
 def test_single_snapshot_graph_model_smoke(model_name: str) -> None:
-    """BasicGCN, MultiHorizonGAT: forward+backward sobre 1 snapshot."""
+    """BasicGCN, MultiHorizonGAT: forward+backward over 1 snapshot."""
     config = _make_config(model_name)
     snapshot = _make_snapshot()
     edge_dim = (
@@ -164,7 +164,7 @@ def test_single_snapshot_graph_model_smoke(model_name: str) -> None:
     model.train()
 
     if model_name == "basic_gcn":
-        # BasicGCN no soporta edge_attr multi-canal; usa el peso escalar.
+        # BasicGCN does not support multi-channel edge_attr; use the scalar weight.
         edge_weight = snapshot.edge_attr[:, 0]
         pred = model(snapshot.x, snapshot.edge_index, edge_weight)
     else:
@@ -174,19 +174,19 @@ def test_single_snapshot_graph_model_smoke(model_name: str) -> None:
         assert pred.shape == (NUM_NODES, NUM_HORIZONS)
         target = snapshot.y
     else:
-        # BasicGCN es single-horizon: produce [N, 1] o [N].
+        # BasicGCN is single-horizon: produces [N, 1] or [N].
         pred = pred.squeeze(-1)
         assert pred.shape == (NUM_NODES,)
         target = snapshot.y[:, 0]
 
     loss = torch.nn.functional.mse_loss(pred, target)
-    assert torch.isfinite(loss), f"{model_name}: loss no finita"
+    assert torch.isfinite(loss), f"{model_name}: non-finite loss"
     loss.backward()
 
 
 @pytest.mark.parametrize("model_name", sorted(SEQUENCE_MODELS))
 def test_sequence_graph_model_smoke(model_name: str) -> None:
-    """SpatioTemporalGNN, Seq2SeqGNN: forward+backward sobre secuencia."""
+    """SpatioTemporalGNN, Seq2SeqGNN: forward+backward over a sequence."""
     config = _make_config(model_name)
     sequence = [_make_snapshot() for _ in range(SEQUENCE_LEN)]
     edge_dim = sequence[0].edge_attr.shape[1]
@@ -198,18 +198,18 @@ def test_sequence_graph_model_smoke(model_name: str) -> None:
         f"{model_name}: pred shape {pred.shape} != ({NUM_NODES}, {NUM_HORIZONS})"
     )
 
-    # El target del último snapshot es el target real en la pipeline.
+    # The last snapshot's target is the real target in the pipeline.
     target = sequence[-1].y
     loss = torch.nn.functional.mse_loss(pred, target)
-    assert torch.isfinite(loss), f"{model_name}: loss no finita"
+    assert torch.isfinite(loss), f"{model_name}: non-finite loss"
     loss.backward()
 
 
 @pytest.mark.parametrize("model_name", sorted(MULTI_HORIZON_MODELS))
 def test_multi_task_smoke(model_name: str) -> None:
-    """W2: cuando ``training.loss == "multi_task"`` el factory crea el
-    modelo con ``output_channels=3`` y el forward + backward sobre
-    ``MultiTaskLoss`` con target ``[N, H, 3]`` debe dar loss finita.
+    """W2: when ``training.loss == "multi_task"`` the factory creates the
+    model with ``output_channels=3`` and the forward + backward over
+    ``MultiTaskLoss`` with a ``[N, H, 3]`` target must give a finite loss.
     """
     config = _make_config(model_name)
     config["training"] = {"loss": "multi_task"}
@@ -218,7 +218,7 @@ def test_multi_task_smoke(model_name: str) -> None:
     model = build_model(config, input_dim=INPUT_DIM, edge_dim=edge_dim)
     model.train()
 
-    # Target multi-canal [N, H, 3] — canal pct ∈ [0, 1].
+    # Multi-channel target [N, H, 3] — pct channel ∈ [0, 1].
     y_arr = torch.randn(NUM_NODES, NUM_HORIZONS)
     y_dep = torch.randn(NUM_NODES, NUM_HORIZONS)
     y_pct = torch.rand(NUM_NODES, NUM_HORIZONS)
@@ -240,18 +240,18 @@ def test_multi_task_smoke(model_name: str) -> None:
         horizon_weights=[1.0] * NUM_HORIZONS,
     )
     loss = criterion(pred, y_multi)
-    assert torch.isfinite(loss), f"{model_name}: multi_task loss no finita"
+    assert torch.isfinite(loss), f"{model_name}: non-finite multi_task loss"
     loss.backward()
 
-    # Componentes individuales registradas en el último forward.
+    # Individual components recorded in the last forward.
     components = criterion.last_components
     for key in ("arr_huber", "dep_huber", "pct_bce", "total"):
-        assert key in components, f"falta componente {key} en MultiTaskLoss"
-        assert np.isfinite(components[key]), f"componente {key} no finita"
+        assert key in components, f"missing component {key} in MultiTaskLoss"
+        assert np.isfinite(components[key]), f"component {key} non-finite"
 
 
 def test_checkpoint_roundtrip_with_model_name() -> None:
-    """save_checkpoint + load_checkpoint deben validar model_name al cargar."""
+    """save_checkpoint + load_checkpoint must validate model_name on load."""
     config = _make_config("multi_horizon_gat")
     snapshot = _make_snapshot()
     model = build_model(config, input_dim=INPUT_DIM, edge_dim=EDGE_DIM)
@@ -268,17 +268,17 @@ def test_checkpoint_roundtrip_with_model_name() -> None:
             model_name="multi_horizon_gat",
         )
 
-        # Carga con el mismo nombre → OK.
+        # Load with the same name → OK.
         new_model = build_model(config, input_dim=INPUT_DIM, edge_dim=EDGE_DIM)
         load_checkpoint(
             ckpt_path, new_model, expected_model_name="multi_horizon_gat",
         )
 
-        # Carga con nombre distinto → error claro.
+        # Load with a different name → clear error.
         wrong_model = build_model(
             _make_config("dense_nn"), input_dim=INPUT_DIM,
         )
-        with pytest.raises(ValueError, match="Mismatch de arquitectura"):
+        with pytest.raises(ValueError, match="Architecture mismatch"):
             load_checkpoint(
                 ckpt_path, wrong_model, expected_model_name="dense_nn",
             )

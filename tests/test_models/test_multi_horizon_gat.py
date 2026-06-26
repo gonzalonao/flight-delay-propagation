@@ -1,4 +1,4 @@
-"""Tests para el modelo MultiHorizonGAT y el graph_builder multi-horizonte."""
+"""Tests for the MultiHorizonGAT model and the multi-horizon graph_builder."""
 
 import numpy as np
 import pandas as pd
@@ -20,19 +20,19 @@ from src.models.multi_horizon_gat import MultiHorizonGAT
 
 @pytest.fixture
 def sample_airports():
-    """Lista de aeropuertos de ejemplo."""
+    """Example airport list."""
     return ["ATL", "DFW", "LAX", "ORD"]
 
 
 @pytest.fixture
 def airport_map(sample_airports):
-    """Mapeo de aeropuertos a indices."""
+    """Airport-to-index mapping."""
     return build_airport_mapping(sample_airports)
 
 
 @pytest.fixture
 def sample_flight_df():
-    """DataFrame de vuelos sintetico para testing (5 dias, 4 aeropuertos)."""
+    """Synthetic flight DataFrame for testing (5 days, 4 airports)."""
     np.random.seed(42)
     n = 500
     airports = ["ATL", "DFW", "LAX", "ORD"]
@@ -53,7 +53,7 @@ def sample_flight_df():
 
 @pytest.fixture
 def simple_graph():
-    """Grafo PyG simple para tests del modelo."""
+    """Simple PyG graph for the model tests."""
     num_nodes = 4
     input_dim = 6
     x = torch.randn(num_nodes, input_dim)
@@ -64,14 +64,14 @@ def simple_graph():
     return x, edge_index
 
 
-# -- Tests del modelo MultiHorizonGAT ----------------------------------------
+# -- MultiHorizonGAT model tests ---------------------------------------------
 
 
 class TestMultiHorizonGAT:
-    """Tests para la arquitectura MultiHorizonGAT."""
+    """Tests for the MultiHorizonGAT architecture."""
 
     def test_output_shape(self, simple_graph):
-        """Output debe ser [num_nodes, num_horizons]."""
+        """Output must be [num_nodes, num_horizons]."""
         x, edge_index = simple_graph
         model = MultiHorizonGAT(
             input_dim=6, hidden_channels=16, num_heads=2,
@@ -81,7 +81,7 @@ class TestMultiHorizonGAT:
         assert out.shape == (4, 5)
 
     def test_output_shape_with_edge_attr(self, simple_graph):
-        """Output correcto con edge_attr multi-canal."""
+        """Correct output with multi-channel edge_attr."""
         x, edge_index = simple_graph
         edge_attr = torch.ones(edge_index.shape[1], 5)
         model = MultiHorizonGAT(
@@ -92,7 +92,7 @@ class TestMultiHorizonGAT:
         assert out.shape == (4, 5)
 
     def test_single_horizon(self, simple_graph):
-        """Con num_horizons=1, output es [num_nodes, 1]."""
+        """With num_horizons=1, output is [num_nodes, 1]."""
         x, edge_index = simple_graph
         model = MultiHorizonGAT(
             input_dim=6, hidden_channels=16, num_heads=2,
@@ -102,7 +102,7 @@ class TestMultiHorizonGAT:
         assert out.shape == (4, 1)
 
     def test_gradients_flow(self, simple_graph):
-        """Los gradientes fluyen a traves de todas las capas."""
+        """Gradients flow through all layers."""
         x, edge_index = simple_graph
         model = MultiHorizonGAT(
             input_dim=6, hidden_channels=16, num_heads=2,
@@ -114,10 +114,10 @@ class TestMultiHorizonGAT:
 
         for name, param in model.named_parameters():
             if param.requires_grad:
-                assert param.grad is not None, f"Sin gradiente en {name}"
+                assert param.grad is not None, f"No gradient in {name}"
 
     def test_different_configs(self):
-        """Distintas configuraciones de capas, cabezas y horizontes."""
+        """Different configurations of layers, heads and horizons."""
         x = torch.randn(4, 6)
         edge_index = torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long)
 
@@ -133,7 +133,7 @@ class TestMultiHorizonGAT:
                     assert out.shape == (4, horizons)
 
     def test_eval_mode_deterministic(self, simple_graph):
-        """En modo eval, el output debe ser determinista."""
+        """In eval mode, the output must be deterministic."""
         x, edge_index = simple_graph
         model = MultiHorizonGAT(
             input_dim=6, hidden_channels=16, num_heads=2,
@@ -146,7 +146,7 @@ class TestMultiHorizonGAT:
         assert torch.allclose(out1, out2)
 
     def test_output_channels_widens_to_multitask(self, simple_graph):
-        """Con output_channels=3 (W2), output es [N, H, 3]."""
+        """With output_channels=3 (W2), output is [N, H, 3]."""
         x, edge_index = simple_graph
         model = MultiHorizonGAT(
             input_dim=6, hidden_channels=16, num_heads=2,
@@ -156,7 +156,7 @@ class TestMultiHorizonGAT:
         assert out.shape == (4, 5, 3)
 
     def test_invalid_output_channels_raises(self):
-        """output_channels < 1 debe lanzar ValueError al construir."""
+        """output_channels < 1 must raise ValueError at construction."""
         with pytest.raises(ValueError, match=">= 1"):
             MultiHorizonGAT(
                 input_dim=6, hidden_channels=8, num_heads=2,
@@ -164,7 +164,7 @@ class TestMultiHorizonGAT:
             )
 
     def test_more_params_than_gcn(self, simple_graph):
-        """GAT con atencion debe tener mas parametros que GCN equivalente."""
+        """GAT with attention must have more parameters than an equivalent GCN."""
         from src.models.basic_gcn import BasicGCN
 
         gcn = BasicGCN(input_dim=6, hidden_channels=64, num_layers=3)
@@ -178,14 +178,14 @@ class TestMultiHorizonGAT:
         assert gat_params > gcn_params
 
 
-# -- Tests del graph_builder multi-horizonte ----------------------------------
+# -- Multi-horizon graph_builder tests ----------------------------------------
 
 
 class TestMultiHorizonGraphBuilder:
-    """Tests para la construccion de grafos multi-horizonte."""
+    """Tests for multi-horizon graph construction."""
 
     def test_multi_horizon_targets_shape(self, sample_flight_df, airport_map):
-        """Targets multi-horizonte ahora son [num_nodes, num_horizons, 3] (W2)."""
+        """Multi-horizon targets are now [num_nodes, num_horizons, 3] (W2)."""
         df = sample_flight_df.copy()
         df["timestamp"] = pd.to_datetime(df["FlightDate"]) + pd.to_timedelta(
             df["Hour"], unit="h"
@@ -199,19 +199,19 @@ class TestMultiHorizonGraphBuilder:
         targets = compute_multi_horizon_targets(
             df, airport_map, current_end, window_delta, horizons
         )
-        # Puede ser None si no hay datos, pero si hay debe tener la forma
+        # May be None if there is no data, but if there is it must have the shape
         if targets is not None:
-            # W2 multi-tarea: [N, H, 3] con canales (arr, dep, pct_15).
+            # W2 multi-task: [N, H, 3] with channels (arr, dep, pct_15).
             assert targets.shape == (len(airport_map), len(horizons), 3)
             assert not torch.isnan(targets).any()
-            # Canal pct ∈ [0, 1] por construcción.
+            # pct channel ∈ [0, 1] by construction.
             pct = targets[..., 2]
             assert (pct >= 0.0).all() and (pct <= 1.0).all()
 
     def test_multi_horizon_targets_match_single(
         self, sample_flight_df, airport_map
     ):
-        """Horizonte 1 canal 0 (arr) debe coincidir con compute_node_targets."""
+        """Horizon 1 channel 0 (arr) must match compute_node_targets."""
         df = sample_flight_df.copy()
         df["timestamp"] = pd.to_datetime(df["FlightDate"]) + pd.to_timedelta(
             df["Hour"], unit="h"
@@ -233,13 +233,13 @@ class TestMultiHorizonGraphBuilder:
                 df, airport_map, current_end, window_delta, [1]
             )
             if multi is not None:
-                # multi es [N, 1, 3]; el canal 0 (arr_delay) replica single.
+                # multi is [N, 1, 3]; channel 0 (arr_delay) replicates single.
                 assert torch.allclose(single, multi[:, 0, 0], atol=1e-5)
 
     def test_create_temporal_graphs_single_horizon(
         self, sample_flight_df, airport_map
     ):
-        """Sin prediction_horizons, targets son [num_nodes] (retrocompatible)."""
+        """Without prediction_horizons, targets are [num_nodes] (backward-compatible)."""
         edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
@@ -250,14 +250,14 @@ class TestMultiHorizonGraphBuilder:
             prediction_horizons=None,
         )
         assert len(graphs) > 0
-        # Single-horizon: targets son 1D
+        # Single-horizon: targets are 1D
         assert graphs[0].y.dim() == 1
         assert graphs[0].y.shape == (len(airport_map),)
 
     def test_create_temporal_graphs_multi_horizon(
         self, sample_flight_df, airport_map
     ):
-        """Con prediction_horizons, targets son [N, num_horizons, 3] (W2)."""
+        """With prediction_horizons, targets are [N, num_horizons, 3] (W2)."""
         edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
@@ -268,7 +268,7 @@ class TestMultiHorizonGraphBuilder:
             window_hours=6, delay_threshold=15.0,
             prediction_horizons=horizons,
         )
-        # Puede haber menos grafos por la mayor ventana de lookahead
+        # There may be fewer graphs due to the larger lookahead window
         if len(graphs) > 0:
             assert graphs[0].y.dim() == 3
             assert graphs[0].y.shape == (len(airport_map), len(horizons), 3)
@@ -276,7 +276,7 @@ class TestMultiHorizonGraphBuilder:
     def test_single_horizon_list_backward_compat(
         self, sample_flight_df, airport_map
     ):
-        """Con prediction_horizons=[1], se mantiene single-horizon [num_nodes]."""
+        """With prediction_horizons=[1], single-horizon [num_nodes] is kept."""
         edge_index, edge_attr_static, edge_pairs = build_edge_index(
             sample_flight_df, airport_map, min_flights=1
         )
@@ -287,5 +287,5 @@ class TestMultiHorizonGraphBuilder:
             prediction_horizons=[1],
         )
         assert len(graphs) > 0
-        # [1] es tratado como single-horizon
+        # [1] is treated as single-horizon
         assert graphs[0].y.dim() == 1

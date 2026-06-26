@@ -1,15 +1,15 @@
-"""Tests para :mod:`src.data.weather`.
+"""Tests for :mod:`src.data.weather`.
 
-No tocan la red — el cliente HTTP se inyecta vía el parámetro
-``_http_fetcher`` que aceptan ``fetch_open_meteo`` y
-``load_weather_for_airports``. Los tests cubren:
+These do not touch the network — the HTTP client is injected via the
+``_http_fetcher`` parameter accepted by ``fetch_open_meteo`` and
+``load_weather_for_airports``. The tests cover:
 
-- Carga de coordenadas desde el CSV bundled.
-- Bucketing de códigos WMO en 5 categorías (canónicas para ops aéreas).
-- Parser de respuestas JSON de Open-Meteo (tipos compactos + categoría).
-- Cache hit/miss en disco (parquet round-trip).
-- Degradación graceful ante errores HTTP / payload vacío.
-- Concatenación multi-aeropuerto con MultiIndex (iata, timestamp).
+- Loading coordinates from the bundled CSV.
+- Bucketing WMO codes into 5 categories (canonical for air ops).
+- Parsing Open-Meteo JSON responses (compact types + category).
+- On-disk cache hit/miss (parquet round-trip).
+- Graceful degradation on HTTP errors / empty payload.
+- Multi-airport concatenation with MultiIndex (iata, timestamp).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from src.data.weather import (
 
 
 def _make_payload(num_hours: int = 24) -> dict:
-    """JSON sintético con la forma de respuesta de Open-Meteo."""
+    """Synthetic JSON with the shape of an Open-Meteo response."""
     times = pd.date_range("2018-06-01", periods=num_hours, freq="h")
     return {
         "hourly": {
@@ -49,9 +49,9 @@ def _make_payload(num_hours: int = 24) -> dict:
             "wind_gusts_10m": [15.0 + i for i in range(num_hours)],
             "precipitation": [0.0] * num_hours,
             "cloud_cover": [50] * num_hours,
-            # Mezcla representativa (un código por bucket) en las primeras
-            # horas, relleno con 3=clear. Truncado a num_hours para que el
-            # bloque sea válido también con num_hours < 8.
+            # Representative mix (one code per bucket) in the first hours,
+            # padded with 3=clear. Truncated to num_hours so the block is
+            # valid even with num_hours < 8.
             "weather_code": ([0, 1, 45, 51, 63, 71, 80, 95]
             + [3] * max(0, num_hours - 8))[:num_hours],
         }
@@ -59,7 +59,7 @@ def _make_payload(num_hours: int = 24) -> dict:
 
 
 def _fake_fetcher_factory(payload: dict):
-    """Devuelve un callable inyectable que ignora la URL y devuelve payload."""
+    """Return an injectable callable that ignores the URL and returns payload."""
 
     def _fake(url: str, timeout: float = 30.0) -> dict:
         return payload
@@ -73,7 +73,7 @@ def _fake_fetcher_factory(payload: dict):
 
 
 class TestWmoBucketing:
-    """5 categorías canónicas: clear/cloudy, fog, rain, snow, thunder."""
+    """5 canonical categories: clear/cloudy, fog, rain, snow, thunder."""
 
     def test_clear_codes_map_to_0(self):
         for code in (0, 1, 2, 3):
@@ -96,7 +96,7 @@ class TestWmoBucketing:
             assert bucket_wmo_code(code) == 4
 
     def test_unknown_code_falls_back_to_0(self):
-        # Códigos fuera del catálogo WMO → clear/cloudy (conservador).
+        # Codes outside the WMO catalog → clear/cloudy (conservative).
         assert bucket_wmo_code(123) == 0
         assert bucket_wmo_code(-1) == 0
 
@@ -107,8 +107,8 @@ class TestWmoBucketing:
         assert bucket_wmo_code(math.nan) == 0
 
     def test_num_categories_constant_matches_bucketing(self):
-        # NUM_WEATHER_CATEGORIES es el contrato hacia graph_builder
-        # (tamaño del one-hot). Tiene que coincidir con max(bucket)+1.
+        # NUM_WEATHER_CATEGORIES is the contract toward graph_builder
+        # (one-hot size). It must match max(bucket)+1.
         assert NUM_WEATHER_CATEGORIES == 5
 
 
@@ -118,22 +118,22 @@ class TestWmoBucketing:
 
 
 class TestLoadAirportCoords:
-    """El CSV bundled cubre al menos los top-30 hubs EE.UU."""
+    """The bundled CSV covers at least the top-30 U.S. hubs."""
 
     def test_loads_default_csv(self):
         coords = load_airport_coords()
         assert isinstance(coords, dict)
-        # Los top-10 deben estar siempre presentes.
+        # The top-10 must always be present.
         for iata in ("ATL", "LAX", "ORD", "DFW", "DEN", "JFK", "SFO", "SEA"):
-            assert iata in coords, f"{iata} ausente del CSV de referencia"
+            assert iata in coords, f"{iata} missing from the reference CSV"
             entry = coords[iata]
             assert isinstance(entry, AirportCoord)
             assert -90 <= entry.latitude <= 90
             assert -180 <= entry.longitude <= 180
 
     def test_atl_coordinates_are_correct(self):
-        # Sanity check de un aeropuerto conocido — sirve para detectar si
-        # alguien edita el CSV y rompe alguna fila.
+        # Sanity check of a known airport — useful to detect if someone
+        # edits the CSV and breaks a row.
         coords = load_airport_coords()
         atl = coords["ATL"]
         assert abs(atl.latitude - 33.64) < 0.1
@@ -146,7 +146,7 @@ class TestLoadAirportCoords:
 
 
 class TestFetchOpenMeteo:
-    """Parser + cache + degradación."""
+    """Parser + cache + degradation."""
 
     def test_parses_payload_into_dataframe(self, tmp_path: Path):
         payload = _make_payload(num_hours=24)
@@ -159,26 +159,26 @@ class TestFetchOpenMeteo:
         assert df.index.name == "timestamp"
         assert "weather_code" in df.columns
         assert "weather_category" in df.columns
-        # Tipos compactos (afectan al footprint cacheado).
+        # Compact types (affect the cached footprint).
         assert df["wind_speed_10m"].dtype.kind == "f"
         assert df["weather_category"].dtype.kind in ("i", "u")
 
     def test_category_column_matches_bucketing(self):
         payload = _make_payload(num_hours=8)
-        # Las primeras 8 horas del payload tienen códigos 0,1,45,51,63,71,80,95
+        # The first 8 hours of the payload have codes 0,1,45,51,63,71,80,95
         df = fetch_open_meteo(
             33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
             cache_path=None,
             _http_fetcher=_fake_fetcher_factory(payload),
         )
-        expected = [0, 0, 1, 2, 2, 3, 2, 4]  # ver bucket_wmo_code
+        expected = [0, 0, 1, 2, 2, 3, 2, 4]  # see bucket_wmo_code
         assert df["weather_category"].tolist() == expected
 
     def test_cache_round_trip(self, tmp_path: Path):
         payload = _make_payload(num_hours=12)
         cache_file = tmp_path / "atl_2018.parquet"
 
-        # MISS — escribe parquet.
+        # MISS — writes parquet.
         calls = {"n": 0}
 
         def counting_fetcher(url: str, timeout: float = 30.0) -> dict:
@@ -192,16 +192,16 @@ class TestFetchOpenMeteo:
         assert cache_file.exists()
         assert calls["n"] == 1
 
-        # HIT — no debe llamar al fetcher.
+        # HIT — must not call the fetcher.
         df2 = fetch_open_meteo(
             33.64, -84.43, dt.date(2018, 6, 1), dt.date(2018, 6, 1),
             cache_path=cache_file, _http_fetcher=counting_fetcher,
         )
-        assert calls["n"] == 1, "El segundo fetch debe leer cache, no HTTP"
+        assert calls["n"] == 1, "The second fetch must read the cache, not HTTP"
         pd.testing.assert_frame_equal(
             df1.reset_index(drop=True),
             df2.reset_index(drop=True),
-            check_dtype=False,  # parquet redondea int8↔int16 en round-trip
+            check_dtype=False,  # parquet rounds int8↔int16 on round-trip
         )
 
     def test_http_error_returns_empty_dataframe(self):
@@ -213,7 +213,7 @@ class TestFetchOpenMeteo:
             cache_path=None, _http_fetcher=raises,
         )
         assert df.empty
-        # Las columnas canónicas siguen estando — el caller las llena con 0.
+        # The canonical columns are still there — the caller fills them with 0.
         for col in ("wind_speed_10m", "weather_code", "weather_category"):
             assert col in df.columns
 
@@ -226,12 +226,12 @@ class TestFetchOpenMeteo:
 
 
 # ---------------------------------------------------------------------------
-# load_weather_for_airports (multi-aeropuerto)
+# load_weather_for_airports (multi-airport)
 # ---------------------------------------------------------------------------
 
 
 class TestLoadWeatherForAirports:
-    """Concatena varios aeropuertos con MultiIndex (iata, timestamp)."""
+    """Concatenates several airports with MultiIndex (iata, timestamp)."""
 
     def test_returns_multiindex_dataframe(self, tmp_path: Path):
         payload = _make_payload(num_hours=6)
@@ -247,14 +247,14 @@ class TestLoadWeatherForAirports:
         assert isinstance(df.index, pd.MultiIndex)
         assert df.index.names == ["iata", "timestamp"]
         assert set(df.index.get_level_values("iata").unique()) == {"ATL", "LAX"}
-        assert len(df) == 12  # 2 aeropuertos × 6 horas
+        assert len(df) == 12  # 2 airports × 6 hours
 
     def test_missing_coords_skipped_with_warning(self, tmp_path: Path, caplog):
         payload = _make_payload(num_hours=2)
         coords = {
             "ATL": AirportCoord("ATL", "Atlanta", 33.64, -84.43, 313.0),
         }
-        # XXX no está en coords → debe omitirse con warning, no romper.
+        # XXX is not in coords → must be skipped with a warning, not break.
         df = load_weather_for_airports(
             ["ATL", "XXX"], dt.date(2018, 6, 1), dt.date(2018, 6, 1),
             coords=coords, cache_dir=tmp_path,
@@ -277,8 +277,8 @@ class TestLoadWeatherForAirports:
         assert df.empty
         assert isinstance(df.index, pd.MultiIndex)
         assert df.index.names == ["iata", "timestamp"]
-        # Las columnas canónicas siguen ahí para que el caller pueda
-        # hacer ``df.loc[iata, col]`` sin tropezar con KeyError de columna.
+        # The canonical columns are still there so the caller can do
+        # ``df.loc[iata, col]`` without tripping on a column KeyError.
         for col in ("wind_speed_10m", "wind_gusts_10m", "precipitation",
                     "cloud_cover", "weather_code", "weather_category"):
             assert col in df.columns
@@ -290,11 +290,11 @@ class TestLoadWeatherForAirports:
 
 
 class TestSchemaVersion:
-    """``WEATHER_SCHEMA_VERSION`` se concatena al hash de cache de snapshots.
+    """``WEATHER_SCHEMA_VERSION`` is concatenated into the snapshot cache hash.
 
-    Si alguien cambia el bucketing o las columnas devueltas, debe
-    incrementar también la versión para que las cachés viejas se invaliden.
-    Este test fija el valor actual para que los cambios sean intencionales.
+    If someone changes the bucketing or the returned columns, they must also
+    bump the version so old caches are invalidated. This test pins the
+    current value so changes are intentional.
     """
 
     def test_schema_version_is_explicit_integer(self):
@@ -303,14 +303,14 @@ class TestSchemaVersion:
 
 
 # ---------------------------------------------------------------------------
-# Integración con graph_builder: helpers + contrato de feat_dim
+# Integration with graph_builder: helpers + feat_dim contract
 # ---------------------------------------------------------------------------
 
 
 pytest.importorskip("torch")
 pytest.importorskip("torch_geometric")
 
-from src.data.graph_builder import (  # noqa: E402  (import tardío deliberado)
+from src.data.graph_builder import (  # noqa: E402  (deliberate late import)
     WEATHER_BLOCK_FUTURE_SIZE_PER_H,
     WEATHER_BLOCK_HIST_SIZE,
     WeatherLookups,
@@ -323,7 +323,7 @@ from src.data.graph_builder import (  # noqa: E402  (import tardío deliberado)
 
 
 def _make_synthetic_weather_df() -> pd.DataFrame:
-    """Genera meteorología sintética para 2 aeropuertos × 48 horas."""
+    """Generate synthetic weather for 2 airports × 48 hours."""
     times = pd.date_range("2018-06-01", periods=48, freq="h")
     frames = []
     for iata in ("AAA", "BBB"):
@@ -333,7 +333,7 @@ def _make_synthetic_weather_df() -> pd.DataFrame:
                 "wind_gusts_10m": np.linspace(15.0, 45.0, 48).astype("float32"),
                 "precipitation": np.zeros(48, dtype="float32"),
                 "cloud_cover": np.full(48, 50.0, dtype="float32"),
-                # Mezcla de categorías: 0=clear, 4=thunder en horas 10-15
+                # Mix of categories: 0=clear, 4=thunder in hours 10-15
                 "weather_category": np.where(
                     (np.arange(48) >= 10) & (np.arange(48) < 16), 4, 0,
                 ).astype("int8"),
@@ -352,25 +352,25 @@ def _make_synthetic_weather_df() -> pd.DataFrame:
 
 
 class TestWeatherHelpers:
-    """``_weather_window_agg`` y ``_weather_point_obs`` respetan el esquema."""
+    """``_weather_window_agg`` and ``_weather_point_obs`` respect the schema."""
 
     def test_window_agg_shape_and_values(self):
         wdf = _make_synthetic_weather_df()
         lookups = _build_weather_lookups(wdf)
         assert lookups is not None
 
-        # Ventana [2018-06-01 09:00, 2018-06-01 16:00) cubre h=9..15
-        # → categorías [0, 4, 4, 4, 4, 4, 4]: dominante = 4 (thunder).
+        # Window [2018-06-01 09:00, 2018-06-01 16:00) covers h=9..15
+        # → categories [0, 4, 4, 4, 4, 4, 4]: dominant = 4 (thunder).
         start = pd.Timestamp("2018-06-01 09:00")
         end = pd.Timestamp("2018-06-01 16:00")
         out = _weather_window_agg(lookups, "AAA", start, end)
         assert out.shape == (WEATHER_BLOCK_HIST_SIZE,)
-        # Wind/precip/cloud no son cero (hay observaciones en la ventana).
+        # Wind/precip/cloud are not zero (there are observations in the window).
         assert out[0] > 0  # mean wind > 0
         assert out[1] > 0  # max gust > 0
-        assert out[2] == 0  # sum precip = 0 (sintético)
+        assert out[2] == 0  # sum precip = 0 (synthetic)
         assert out[3] == 50.0  # mean cloud = 50
-        # One-hot: categoría 4 dominante.
+        # One-hot: category 4 dominant.
         assert out[4 + 4] == 1.0
         assert out[4 + 0] == 0.0
 
@@ -380,33 +380,33 @@ class TestWeatherHelpers:
         start = pd.Timestamp("2018-06-01 00:00")
         end = pd.Timestamp("2018-06-01 03:00")
         out = _weather_window_agg(lookups, "ZZZ", start, end)
-        # Aeropuerto inexistente → bloque H = ceros completos.
+        # Nonexistent airport → block H = all zeros.
         assert out.shape == (WEATHER_BLOCK_HIST_SIZE,)
         assert (out == 0).all()
 
     def test_point_obs_lookup_exact_hour(self):
         wdf = _make_synthetic_weather_df()
         lookups = _build_weather_lookups(wdf)
-        # Hora 12 cae en la franja thunder (categoría 4).
+        # Hour 12 falls in the thunder band (category 4).
         out = _weather_point_obs(lookups, "AAA", pd.Timestamp("2018-06-01 12:30"))
         assert out.shape == (WEATHER_BLOCK_FUTURE_SIZE_PER_H,)
-        # ``floor("h")`` redondea a las 12:00.
-        assert out[4 + 4] == 1.0  # categoría thunder
+        # ``floor("h")`` rounds to 12:00.
+        assert out[4 + 4] == 1.0  # thunder category
 
     def test_disabled_params_zero_out_block(self):
         wdf = _make_synthetic_weather_df()
-        # Solo wind activo → precip/cloud/category quedan a 0.
+        # Only wind active → precip/cloud/category stay at 0.
         lookups = _build_weather_lookups(
             wdf, enabled_params=frozenset({"wind"}),
         )
         start = pd.Timestamp("2018-06-01 09:00")
         end = pd.Timestamp("2018-06-01 16:00")
         out = _weather_window_agg(lookups, "AAA", start, end)
-        assert out[0] > 0  # wind sigue activo
-        assert out[1] > 0  # gust sigue activo
-        assert out[2] == 0  # precip apagado
-        assert out[3] == 0  # cloud apagado
-        assert (out[4:9] == 0).all()  # category apagado
+        assert out[0] > 0  # wind still active
+        assert out[1] > 0  # gust still active
+        assert out[2] == 0  # precip off
+        assert out[3] == 0  # cloud off
+        assert (out[4:9] == 0).all()  # category off
 
     def test_build_lookups_returns_none_for_empty(self):
         empty = pd.DataFrame(
@@ -419,11 +419,11 @@ class TestWeatherHelpers:
 
 
 class TestFeatureBlockContract:
-    """``compute_node_features_rich`` extiende feat_dim solo si hay weather."""
+    """``compute_node_features_rich`` extends feat_dim only if weather is present."""
 
     def _build_flight_df(self) -> pd.DataFrame:
-        """DataFrame sintético mínimo para que ``_build_history_lookups``
-        funcione sin error: 2 aeropuertos × 48 horas × 1 vuelo/h."""
+        """Minimal synthetic DataFrame so ``_build_history_lookups`` works
+        without error: 2 airports × 48 hours × 1 flight/h."""
         rows = []
         for iata_origin, iata_dest in [("AAA", "BBB"), ("BBB", "AAA")]:
             for h in range(48):
@@ -447,7 +447,7 @@ class TestFeatureBlockContract:
         return df
 
     def test_feat_dim_without_weather(self):
-        import torch  # local re-import por orden de skip
+        import torch  # local re-import due to skip ordering
         df = self._build_flight_df()
         airport_map = {"AAA": 0, "BBB": 1}
         window_delta = pd.Timedelta(hours=1)
@@ -463,7 +463,7 @@ class TestFeatureBlockContract:
             history_lookups=history,
             weather_lookups=None,
         )
-        # Sin weather: 9+4+5+4+2+6+5·H = 30 + 5·5 = 55.
+        # Without weather: 9+4+5+4+2+6+5·H = 30 + 5·5 = 55.
         assert feats.shape == (2, 55)
         assert isinstance(feats, torch.Tensor)
 
@@ -485,19 +485,19 @@ class TestFeatureBlockContract:
             history_lookups=history,
             weather_lookups=weather,
         )
-        # Con weather: 55 + 9 + 9·5 = 109.
+        # With weather: 55 + 9 + 9·5 = 109.
         assert feats.shape == (2, 109)
-        # El bloque H NO debe ser todo ceros — hay señal sintética.
+        # Block H must NOT be all zeros — there is synthetic signal.
         h_block = feats[:, 55:]
         assert h_block.abs().sum().item() > 0
 
     def test_weather_block_zero_when_airport_missing(self):
         df = self._build_flight_df()
-        airport_map = {"AAA": 0, "BBB": 1, "ZZZ": 2}  # ZZZ no tiene weather
+        airport_map = {"AAA": 0, "BBB": 1, "ZZZ": 2}  # ZZZ has no weather
         window_delta = pd.Timedelta(hours=1)
         horizons = [1, 2]
         history = _build_history_lookups(df, airport_map, window_delta)
-        wdf = _make_synthetic_weather_df()  # Solo AAA, BBB
+        wdf = _make_synthetic_weather_df()  # Only AAA, BBB
         weather = _build_weather_lookups(wdf)
         window_df = df[df["timestamp"] < pd.Timestamp("2018-06-01 06:00")]
 
@@ -509,7 +509,7 @@ class TestFeatureBlockContract:
             history_lookups=history,
             weather_lookups=weather,
         )
-        # Bloque H del nodo ZZZ (índice 2) debe ser cero.
+        # Block H of node ZZZ (index 2) must be zero.
         h_block_start = 9 + 4 + 5 + 4 + 2 + 6 + 5 * len(horizons)
         zzz_block = feats[airport_map["ZZZ"], h_block_start:]
         assert (zzz_block == 0).all()

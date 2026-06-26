@@ -1,13 +1,13 @@
-"""Tests para Seq2SeqGNN (Spatio-Temporal Transformer + horizon-query decoder).
+"""Tests for Seq2SeqGNN (Spatio-Temporal Transformer + horizon-query decoder).
 
-Refleja el rediseño del workstream W3:
+Reflects the W3 workstream redesign:
     - Constructor: ``hidden_dim``, ``num_spatial_layers``, ``num_temporal_layers``
-      (las antiguas ``gnn_hidden`` / ``lstm_hidden`` / ``num_gnn_layers`` se
-      mantienen sólo en la fábrica como fallback de retro-compatibilidad).
-    - Sin teacher forcing: el output no depende de ``y`` ni en train ni en
-      eval; el modelo es idéntico salvo dropout.
-    - Sin ``start_token`` ni ``output_heads`` ModuleList: el decoder usa
-      embeddings de query por horizonte y un único MLP de salida.
+      (the old ``gnn_hidden`` / ``lstm_hidden`` / ``num_gnn_layers`` are kept
+      only in the factory as a backward-compatibility fallback).
+    - No teacher forcing: the output does not depend on ``y`` in train or
+      eval; the model is identical except for dropout.
+    - No ``start_token`` or ``output_heads`` ModuleList: the decoder uses
+      per-horizon query embeddings and a single output MLP.
 """
 
 import pytest
@@ -23,7 +23,7 @@ from src.training.graph_trainer import SequenceGraphTrainer
 
 @pytest.fixture
 def simple_graph():
-    """Grafo PyG con 4 nodos, 6 features, 5 horizontes."""
+    """PyG graph with 4 nodes, 6 features, 5 horizons."""
     num_nodes = 4
     input_dim = 6
     num_horizons = 5
@@ -32,9 +32,9 @@ def simple_graph():
         [[0, 1, 1, 2, 2, 3, 0, 3],
          [1, 0, 2, 1, 3, 2, 3, 0]], dtype=torch.long
     )
-    # ``edge_attr`` no negativo: si en el futuro un test pasa esto a una
-    # capa que normaliza pesos (GCNConv) evitamos NaN. GATv2Conv lo trata
-    # como features y acepta valores arbitrarios igualmente.
+    # Non-negative ``edge_attr``: if a future test passes this to a layer
+    # that normalizes weights (GCNConv) we avoid NaN. GATv2Conv treats it as
+    # features and accepts arbitrary values anyway.
     edge_attr = torch.rand(edge_index.shape[1], 1)
     y = torch.randn(num_nodes, num_horizons)
     active_mask = torch.ones(num_nodes, dtype=torch.bool)
@@ -46,7 +46,7 @@ def simple_graph():
 
 @pytest.fixture
 def graph_sequence(simple_graph):
-    """Secuencia de 6 grafos; sólo el último expone target real."""
+    """Sequence of 6 graphs; only the last exposes a real target."""
     sequence = []
     for i in range(6):
         g = simple_graph.clone()
@@ -65,7 +65,7 @@ def _make_model(
     num_spatial_layers: int = 2,
     num_temporal_layers: int = 1,
 ) -> Seq2SeqGNN:
-    """Helper para reducir ruido en los tests."""
+    """Helper to reduce noise in the tests."""
     return Seq2SeqGNN(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
@@ -74,32 +74,32 @@ def _make_model(
         num_temporal_layers=num_temporal_layers,
         num_horizons=num_horizons,
         dropout=dropout,
-        edge_dim=1,  # los fixtures usan edge_attr de 1 canal
+        edge_dim=1,  # the fixtures use 1-channel edge_attr
     )
 
 
-# -- Tests del modelo Seq2SeqGNN ---------------------------------------------
+# -- Seq2SeqGNN model tests --------------------------------------------------
 
 
 class TestSeq2SeqGNN:
-    """Tests para la nueva arquitectura Seq2SeqGNN."""
+    """Tests for the new Seq2SeqGNN architecture."""
 
     def test_output_shape_eval(self, graph_sequence):
-        """Output debe ser [num_nodes, num_horizons] en modo eval."""
+        """Output must be [num_nodes, num_horizons] in eval mode."""
         model = _make_model()
         model.eval()
         out = model(graph_sequence)
         assert out.shape == (4, 5)
 
     def test_output_shape_train(self, graph_sequence):
-        """Output con la misma forma en modo train (no hay distribution shift)."""
+        """Output with the same shape in train mode (no distribution shift)."""
         model = _make_model()
         model.train()
         out = model(graph_sequence)
         assert out.shape == (4, 5)
 
     def test_different_num_horizons(self, graph_sequence):
-        """Distintos num_horizons producen outputs del tamaño correcto."""
+        """Different num_horizons produce outputs of the correct size."""
         for h in [1, 3, 5, 7]:
             seq = [g.clone() for g in graph_sequence]
             seq[-1].y = torch.randn(4, h)
@@ -109,8 +109,8 @@ class TestSeq2SeqGNN:
             assert out.shape == (4, h)
 
     def test_gradients_flow(self, graph_sequence):
-        """Los gradientes fluyen a través de encoder espacial, Transformer,
-        queries de horizonte, cross-attention y head MLP."""
+        """Gradients flow through the spatial encoder, Transformer, horizon
+        queries, cross-attention and head MLP."""
         model = _make_model()
         model.train()
         out = model(graph_sequence)
@@ -119,10 +119,10 @@ class TestSeq2SeqGNN:
 
         for name, param in model.named_parameters():
             if param.requires_grad:
-                assert param.grad is not None, f"Sin gradiente en {name}"
+                assert param.grad is not None, f"No gradient in {name}"
 
     def test_eval_mode_deterministic(self, graph_sequence):
-        """En modo eval el dropout está apagado, así que el output es determinista."""
+        """In eval mode dropout is off, so the output is deterministic."""
         model = _make_model()
         model.eval()
         out1 = model(graph_sequence)
@@ -130,7 +130,7 @@ class TestSeq2SeqGNN:
         assert torch.allclose(out1, out2)
 
     def test_targets_have_no_effect_in_eval(self, graph_sequence):
-        """Sin teacher forcing: cambiar ``y`` no cambia la predicción en eval."""
+        """No teacher forcing: changing ``y`` does not change the eval prediction."""
         model = _make_model()
         model.eval()
 
@@ -141,12 +141,12 @@ class TestSeq2SeqGNN:
         out2 = model(seq2)
 
         assert torch.allclose(out1, out2), (
-            "El output del nuevo Seq2SeqGNN no debe depender de y "
-            "(no hay teacher forcing)."
+            "The new Seq2SeqGNN output must not depend on y "
+            "(no teacher forcing)."
         )
 
     def test_targets_have_no_effect_in_train(self, graph_sequence):
-        """Sin teacher forcing tampoco en train: el modelo nunca lee ``y``."""
+        """No teacher forcing in train either: the model never reads ``y``."""
         torch.manual_seed(0)
         model = _make_model(dropout=0.0)
         model.train()
@@ -158,36 +158,36 @@ class TestSeq2SeqGNN:
         out2 = model(seq2)
 
         assert torch.allclose(out1, out2), (
-            "Con dropout=0, train y eval deben coincidir y ningún horizonte "
-            "puede depender de y (el rediseño elimina teacher forcing)."
+            "With dropout=0, train and eval must match and no horizon can "
+            "depend on y (the redesign removes teacher forcing)."
         )
 
     def test_horizon_queries_are_learnable(self):
-        """Los embeddings de query por horizonte son parámetros entrenables."""
+        """The per-horizon query embeddings are trainable parameters."""
         model = _make_model(num_horizons=5)
         assert model.horizon_queries.requires_grad
         assert model.horizon_queries.shape == (5, model.hidden_dim)
 
     def test_single_mlp_head_not_per_horizon_linears(self):
-        """El head es un único MLP — ya no hay una Linear por horizonte."""
+        """The head is a single MLP — no longer one Linear per horizon."""
         model = _make_model()
-        # No debe existir el atributo ``output_heads`` del diseño antiguo.
+        # The old design's ``output_heads`` attribute must not exist.
         assert not hasattr(model, "output_heads")
-        # Y sí debe existir un ``head`` que sea Sequential MLP.
+        # And there must be a ``head`` that is a Sequential MLP.
         assert isinstance(model.head, torch.nn.Sequential)
 
     def test_no_lstm_modules(self):
-        """El rediseño no usa LSTMs (ni encoder ni decoder)."""
+        """The redesign uses no LSTMs (neither encoder nor decoder)."""
         model = _make_model()
         for module in model.modules():
             assert not isinstance(module, torch.nn.LSTM), (
-                "El nuevo Seq2SeqGNN no debe contener LSTMs"
+                "The new Seq2SeqGNN must not contain LSTMs"
             )
 
     def test_output_channels_widens_to_multitask(self, graph_sequence):
-        """Con output_channels=3 (W2), output es [N, H, 3] en eval y train."""
+        """With output_channels=3 (W2), output is [N, H, 3] in eval and train."""
         model = _make_model()
-        # Construir con la misma firma pero output_channels=3.
+        # Build with the same signature but output_channels=3.
         model = Seq2SeqGNN(
             input_dim=6, hidden_dim=16, num_heads=2,
             num_spatial_layers=2, num_temporal_layers=1,
@@ -202,7 +202,7 @@ class TestSeq2SeqGNN:
         assert out_train.shape == (4, 5, 3)
 
     def test_invalid_output_channels_raises(self):
-        """output_channels < 1 debe lanzar ValueError al construir."""
+        """output_channels < 1 must raise ValueError at construction."""
         with pytest.raises(ValueError, match=">= 1"):
             Seq2SeqGNN(
                 input_dim=6, hidden_dim=16, num_heads=2,
@@ -211,11 +211,11 @@ class TestSeq2SeqGNN:
             )
 
     def test_hidden_dim_must_be_divisible_by_num_heads(self):
-        """Constructor falla rápido si hidden_dim % num_heads != 0."""
-        with pytest.raises(ValueError, match="divisible por num_heads"):
+        """The constructor fails fast if hidden_dim % num_heads != 0."""
+        with pytest.raises(ValueError, match="divisible by num_heads"):
             Seq2SeqGNN(
                 input_dim=6,
-                hidden_dim=15,    # 15 no es divisible por 2
+                hidden_dim=15,    # 15 is not divisible by 2
                 num_heads=2,
                 num_spatial_layers=1,
                 num_temporal_layers=1,
@@ -223,7 +223,7 @@ class TestSeq2SeqGNN:
             )
 
     def test_spatial_encoder_supports_single_layer(self, simple_graph):
-        """SpatialGATEncoder con num_layers=1 sigue produciendo hidden_dim."""
+        """SpatialGATEncoder with num_layers=1 still produces hidden_dim."""
         enc = SpatialGATEncoder(
             input_dim=6, hidden_dim=16, num_heads=2,
             num_layers=1, dropout=0.0, edge_dim=1,
@@ -232,14 +232,14 @@ class TestSeq2SeqGNN:
         assert out.shape == (4, 16)
 
 
-# -- Tests de integración con SequenceGraphTrainer --------------------------
+# -- Integration tests with SequenceGraphTrainer ----------------------------
 
 
 class TestSeq2SeqWithTrainer:
-    """Tests que verifican que Seq2SeqGNN entrena con el trainer existente."""
+    """Tests verifying that Seq2SeqGNN trains with the existing trainer."""
 
     def _make_sequences(self, n_seqs: int = 3) -> list[list[Data]]:
-        """Crea secuencias sintéticas con edge_attr de 1 canal."""
+        """Create synthetic sequences with 1-channel edge_attr."""
         sequences = []
         for _ in range(n_seqs):
             seq = []
@@ -258,7 +258,7 @@ class TestSeq2SeqWithTrainer:
         return sequences
 
     def test_trains_with_sequence_trainer(self):
-        """Seq2SeqGNN se integra con SequenceGraphTrainer sin cambios."""
+        """Seq2SeqGNN integrates with SequenceGraphTrainer unchanged."""
         model = _make_model(hidden_dim=8)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(
@@ -273,7 +273,7 @@ class TestSeq2SeqWithTrainer:
         assert loss > 0
 
     def test_loss_decreases(self):
-        """La pérdida disminuye tras varias épocas sobre datos fijos."""
+        """The loss decreases after several epochs over fixed data."""
         torch.manual_seed(42)
         model = _make_model(hidden_dim=8, dropout=0.0)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
@@ -291,7 +291,7 @@ class TestSeq2SeqWithTrainer:
         assert loss_last < loss_first
 
     def test_validate_uses_eval_mode(self):
-        """validate() pone el modelo en eval."""
+        """validate() puts the model in eval."""
         model = _make_model(hidden_dim=8)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         trainer = SequenceGraphTrainer(

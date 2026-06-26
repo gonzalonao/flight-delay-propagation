@@ -1,4 +1,4 @@
-"""Tests para SpatioTemporalGNN, GATEncoder, secuencias temporales y trainer."""
+"""Tests for SpatioTemporalGNN, GATEncoder, temporal sequences and trainer."""
 
 import pytest
 import torch
@@ -14,7 +14,7 @@ from src.training.graph_trainer import SequenceGraphTrainer
 
 @pytest.fixture
 def simple_graph():
-    """Grafo PyG simple con 4 nodos y 6 features."""
+    """Simple PyG graph with 4 nodes and 6 features."""
     num_nodes = 4
     input_dim = 6
     num_horizons = 5
@@ -34,7 +34,7 @@ def simple_graph():
 
 @pytest.fixture
 def graph_sequence(simple_graph):
-    """Secuencia de 6 grafos con datos ligeramente diferentes."""
+    """Sequence of 6 graphs with slightly different data."""
     sequence = []
     for _ in range(6):
         g = simple_graph.clone()
@@ -46,7 +46,7 @@ def graph_sequence(simple_graph):
 
 @pytest.fixture
 def graph_list():
-    """Lista de 15 grafos PyG para tests de secuencias."""
+    """List of 15 PyG graphs for sequence tests."""
     graphs = []
     for i in range(15):
         num_nodes = 4
@@ -61,14 +61,14 @@ def graph_list():
     return graphs
 
 
-# -- Tests GATEncoder --------------------------------------------------------
+# -- GATEncoder tests --------------------------------------------------------
 
 
 class TestGATEncoder:
-    """Tests para el encoder GAT espacial."""
+    """Tests for the spatial GAT encoder."""
 
     def test_output_shape(self, simple_graph):
-        """Output debe ser [num_nodes, hidden_channels]."""
+        """Output must be [num_nodes, hidden_channels]."""
         encoder = GATEncoder(
             input_dim=6, hidden_channels=16, num_heads=2, num_layers=2,
         )
@@ -76,7 +76,7 @@ class TestGATEncoder:
         assert out.shape == (4, 16)
 
     def test_with_edge_attr(self, simple_graph):
-        """Funciona con edge_attr multi-canal."""
+        """Works with multi-channel edge_attr."""
         encoder = GATEncoder(
             input_dim=6, hidden_channels=16, num_heads=2, num_layers=2,
             edge_dim=5,
@@ -87,7 +87,7 @@ class TestGATEncoder:
         assert out.shape == (4, 16)
 
     def test_single_layer(self):
-        """Encoder con una sola capa GAT."""
+        """Encoder with a single GAT layer."""
         encoder = GATEncoder(
             input_dim=6, hidden_channels=8, num_heads=2, num_layers=1,
         )
@@ -98,14 +98,14 @@ class TestGATEncoder:
         assert out.shape[0] == 4
 
 
-# -- Tests SpatioTemporalGNN ------------------------------------------------
+# -- SpatioTemporalGNN tests ------------------------------------------------
 
 
 class TestSpatioTemporalGNN:
-    """Tests para el modelo SpatioTemporalGNN completo."""
+    """Tests for the full SpatioTemporalGNN model."""
 
     def test_output_shape(self, graph_sequence):
-        """Output debe ser [num_nodes, num_horizons]."""
+        """Output must be [num_nodes, num_horizons]."""
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=16, lstm_hidden=32,
             num_heads=2, num_gnn_layers=2, num_horizons=5,
@@ -115,7 +115,7 @@ class TestSpatioTemporalGNN:
         assert out.shape == (4, 5)
 
     def test_different_configs(self, graph_sequence):
-        """Distintas configuraciones producen shapes correctos."""
+        """Different configurations produce correct shapes."""
         configs = [
             {"gnn_hidden": 8, "lstm_hidden": 16, "num_heads": 1,
              "num_gnn_layers": 2, "num_horizons": 3},
@@ -129,7 +129,7 @@ class TestSpatioTemporalGNN:
             assert out.shape == (4, cfg["num_horizons"])
 
     def test_gradients_flow(self, graph_sequence):
-        """Los gradientes fluyen a traves de GAT, LSTM y head."""
+        """Gradients flow through GAT, LSTM and head."""
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=16, lstm_hidden=32,
             num_heads=2, num_gnn_layers=2, num_horizons=5,
@@ -140,10 +140,10 @@ class TestSpatioTemporalGNN:
 
         for name, param in model.named_parameters():
             if param.requires_grad:
-                assert param.grad is not None, f"Sin gradiente en {name}"
+                assert param.grad is not None, f"No gradient in {name}"
 
     def test_eval_mode_deterministic(self, graph_sequence):
-        """En modo eval, el output debe ser determinista."""
+        """In eval mode, the output must be deterministic."""
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=16, lstm_hidden=32,
             num_heads=2, num_gnn_layers=2, num_horizons=5,
@@ -154,7 +154,7 @@ class TestSpatioTemporalGNN:
         assert torch.allclose(out1, out2)
 
     def test_variable_sequence_lengths(self):
-        """Secuencias de diferente longitud funcionan correctamente."""
+        """Sequences of different lengths work correctly."""
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=16, lstm_hidden=32,
             num_heads=2, num_gnn_layers=2, num_horizons=5,
@@ -175,7 +175,7 @@ class TestSpatioTemporalGNN:
             assert out.shape == (4, 5)
 
     def test_output_channels_widens_to_multitask(self, graph_sequence):
-        """Con output_channels=3 (W2), output es [N, H, 3]."""
+        """With output_channels=3 (W2), output is [N, H, 3]."""
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=16, lstm_hidden=32,
             num_heads=2, num_gnn_layers=2, num_horizons=5,
@@ -186,7 +186,7 @@ class TestSpatioTemporalGNN:
         assert out.shape == (4, 5, 3)
 
     def test_invalid_output_channels_raises(self):
-        """output_channels < 1 debe lanzar ValueError al construir."""
+        """output_channels < 1 must raise ValueError at construction."""
         with pytest.raises(ValueError, match=">= 1"):
             SpatioTemporalGNN(
                 input_dim=6, gnn_hidden=16, lstm_hidden=32,
@@ -195,7 +195,7 @@ class TestSpatioTemporalGNN:
             )
 
     def test_more_params_than_gat(self, graph_sequence):
-        """SpatioTemporalGNN debe tener mas parametros que MultiHorizonGAT."""
+        """SpatioTemporalGNN must have more parameters than MultiHorizonGAT."""
         from src.models.multi_horizon_gat import MultiHorizonGAT
 
         gat = MultiHorizonGAT(
@@ -212,26 +212,26 @@ class TestSpatioTemporalGNN:
         assert stgnn_params > gat_params
 
 
-# -- Tests create_temporal_sequences ----------------------------------------
+# -- create_temporal_sequences tests ----------------------------------------
 
 
 class TestCreateTemporalSequences:
-    """Tests para la creacion de secuencias temporales."""
+    """Tests for temporal sequence creation."""
 
     def test_basic_sliding_window(self, graph_list):
-        """10 grafos con window=6 produce 5 secuencias."""
+        """10 graphs with window=6 produce 5 sequences."""
         graphs = graph_list[:10]
         sequences = create_temporal_sequences(graphs, input_window=6)
         assert len(sequences) == 5  # 10 - 6 + 1
 
     def test_sequence_length(self, graph_list):
-        """Cada secuencia tiene exactamente input_window grafos."""
+        """Each sequence has exactly input_window graphs."""
         sequences = create_temporal_sequences(graph_list, input_window=6)
         for seq in sequences:
             assert len(seq) == 6
 
     def test_empty_when_too_few_graphs(self):
-        """Menos grafos que window retorna lista vacia."""
+        """Fewer graphs than the window returns an empty list."""
         graphs = [
             Data(x=torch.randn(4, 6), edge_index=torch.zeros(2, 0, dtype=torch.long))
             for _ in range(3)
@@ -240,7 +240,7 @@ class TestCreateTemporalSequences:
         assert len(sequences) == 0
 
     def test_targets_from_last_graph(self, graph_list):
-        """El target de cada secuencia es el .y del ultimo grafo."""
+        """Each sequence's target is the .y of the last graph."""
         sequences = create_temporal_sequences(graph_list, input_window=6)
         for seq in sequences:
             # Last graph's y is the sequence target
@@ -248,7 +248,7 @@ class TestCreateTemporalSequences:
             assert seq[-1].y.shape == (4, 5)
 
     def test_sliding_step_one(self, graph_list):
-        """Secuencias consecutivas se solapan en input_window-1 grafos."""
+        """Consecutive sequences overlap in input_window-1 graphs."""
         sequences = create_temporal_sequences(graph_list, input_window=6)
         if len(sequences) >= 2:
             # First sequence [0:6], second [1:7] -> overlap is [1:6]
@@ -256,7 +256,7 @@ class TestCreateTemporalSequences:
                 assert sequences[0][i] is sequences[1][i - 1]
 
     def test_exact_window_size(self):
-        """Exactamente input_window grafos produce 1 secuencia."""
+        """Exactly input_window graphs produces 1 sequence."""
         graphs = [
             Data(x=torch.randn(4, 6), edge_index=torch.zeros(2, 0, dtype=torch.long))
             for _ in range(6)
@@ -265,14 +265,14 @@ class TestCreateTemporalSequences:
         assert len(sequences) == 1
 
 
-# -- Tests SequenceGraphTrainer ---------------------------------------------
+# -- SequenceGraphTrainer tests ---------------------------------------------
 
 
 class TestSequenceGraphTrainer:
-    """Tests para el entrenador de secuencias de grafos."""
+    """Tests for the graph-sequence trainer."""
 
     def _make_sequences(self, n_seqs=3, seq_len=6):
-        """Crea secuencias sinteticas para testing."""
+        """Create synthetic sequences for testing."""
         sequences = []
         for _ in range(n_seqs):
             seq = []
@@ -291,7 +291,7 @@ class TestSequenceGraphTrainer:
         return sequences
 
     def test_train_epoch_runs(self):
-        """train_epoch ejecuta sin errores y retorna un float."""
+        """train_epoch runs without errors and returns a float."""
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=8, lstm_hidden=16,
             num_heads=2, num_gnn_layers=2, num_horizons=5,
@@ -309,7 +309,7 @@ class TestSequenceGraphTrainer:
         assert loss > 0
 
     def test_validate_runs(self):
-        """validate ejecuta sin errores y retorna un float."""
+        """validate runs without errors and returns a float."""
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=8, lstm_hidden=16,
             num_heads=2, num_gnn_layers=2, num_horizons=5,
@@ -327,7 +327,7 @@ class TestSequenceGraphTrainer:
         assert loss > 0
 
     def test_loss_decreases(self):
-        """La perdida disminuye tras algunas epocas de entrenamiento."""
+        """The loss decreases after a few training epochs."""
         torch.manual_seed(42)
         model = SpatioTemporalGNN(
             input_dim=6, gnn_hidden=8, lstm_hidden=16,
