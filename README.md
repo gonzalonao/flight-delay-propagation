@@ -102,7 +102,7 @@ The dashboard drills down to any single airport and horizon:
 │   ├── raw/              # Original Kaggle CSVs/Parquet (not tracked)
 │   └── processed/        # Cleaned data + snapshot/weather caches (not tracked)
 ├── deploy/               # Azure provisioning scripts
-├── docs/                 # Deployment plan, Power BI spec, next steps
+├── docs/                 # Deployment plan, Power BI spec, ablation log, roadmap
 ├── fabric/               # Fabric notebooks + Data Factory pipeline blueprints
 ├── notebooks/            # Jupyter notebooks for EDA and results
 ├── powerbi/              # Power BI report assets
@@ -167,6 +167,29 @@ uv run python scripts/predict.py --checkpoint outputs/best_model.pt
 # Export tables for the Power BI report
 uv run python scripts/export_powerbi.py
 ```
+
+## Documentation
+
+Deeper documentation lives in [`docs/`](docs/) — see the
+[documentation index](docs/README.md) for a guided table of contents:
+
+- [Deployment plan](docs/deployment-plan.md) — end-to-end Azure + Fabric architecture.
+- [Power BI report spec](docs/powerbi-report-spec.md) — data model, DAX, and page layouts.
+- [Ablation log](docs/ablation-log.md) — the experiment log behind the final feature set.
+- [GPU setup](docs/gpu-setup.md) — CUDA / Blackwell wheels and device selection.
+- [Roadmap](docs/roadmap.md) — planned improvements.
+
+## Roadmap
+
+A few directions are planned next — see [docs/roadmap.md](docs/roadmap.md) for detail:
+
+- **Serve real weather to the live model.** The champion is trained with ERA5
+  weather, but the live inference path currently zero-fills weather columns;
+  wiring the Open-Meteo Forecast API into the Fabric notebook would let
+  production predictions actually use weather.
+- **Quantify weather's contribution** via the block-H ablation (per-horizon MAE delta).
+- **Enable the champion/challenger retraining pipeline** (`aml/` is code-as-documentation today).
+- **Add a FastAPI serving layer** over `src/inference/predictor.py` (optional Part 2).
 
 ## License
 
