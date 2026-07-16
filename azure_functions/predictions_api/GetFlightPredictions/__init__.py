@@ -15,8 +15,13 @@ Query params:
 
 Returns JSON:
     {"airport": "ATL", "horizon": 2, "predicted_arr_delay_min": 14.3,
-     "pct_arr_delayed_15": 0.62, "target_ts": "2026-05-19T16:00:00+00:00",
+     "pct_arr_delayed_15": 0.62, "sched_arr_count": 48, "sched_dep_count": 51,
+     "expected_delayed_flights": 29.76, "target_ts": "2026-05-19T16:00:00+00:00",
      "prediction_ts": "2026-05-19T14:00:00+00:00"}
+
+The scheduled-volume / expected-delayed fields are present only when the
+nb_inference enrichment columns exist in the predictions_latest table; the
+response degrades gracefully (omits them) against an older table schema.
 """
 
 import json
@@ -70,6 +75,16 @@ def _read_prediction(airport: str, horizon: int):
     }
     if "pct_arr_delayed_15" in df.columns:
         result["pct_arr_delayed_15"] = round(float(row["pct_arr_delayed_15"]), 3)
+    # Scheduled-volume enrichment (added by nb_inference); optional so the API
+    # still works against a pre-enrichment table schema.
+    if "sched_arr_count" in df.columns:
+        result["sched_arr_count"] = int(row["sched_arr_count"])
+    if "sched_dep_count" in df.columns:
+        result["sched_dep_count"] = int(row["sched_dep_count"])
+    if "expected_delayed_flights" in df.columns:
+        result["expected_delayed_flights"] = round(
+            float(row["expected_delayed_flights"]), 2
+        )
     if "target_ts" in df.columns:
         result["target_ts"] = str(row["target_ts"])
     return result
