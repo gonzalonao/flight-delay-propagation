@@ -1,0 +1,26 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'15px'}}}%%
+flowchart TB
+    subgraph TRAIN["Entrenamiento (local)"]
+        direction TB
+        LOCAL["Entrenamiento local<br/>scripts/train.py · GPU local"]
+        CKPT[("Checkpoint del modelo<br/>.pt (seq2seq_gnn)")]
+        LOCAL --> CKPT
+    end
+
+    UPLOAD["Subida manual del modelo<br/>entrenado a Microsoft Fabric"]
+
+    subgraph FABRIC["Microsoft Fabric"]
+        direction TB
+        AF["Azure Function (ingesta)<br/>feed de vuelos en vivo → OneLake"]
+        NBINF["nb_inference (Fabric)<br/>predict_to_frame<br/>secuencia → filas long"]
+        AF --> NBINF
+    end
+
+    OL[("OneLake · predictions_latest<br/>airport_code · horizon_h · predicted_arr_delay_min<br/>pct_arr_delayed_15 · target_ts · prediction_ts")]
+
+    PBI["Power BI (DirectLake)<br/>cuadro de mando"]
+
+    CKPT --> UPLOAD
+    UPLOAD --> NBINF
+    NBINF --> OL
+    OL --> PBI

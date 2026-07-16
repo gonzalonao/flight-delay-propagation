@@ -1,0 +1,32 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'15px'}}}%%
+flowchart TB
+    subgraph ING["Ingesta de datos"]
+        direction LR
+        RAW[("Vuelos BTS<br/>2018-2022<br/>Combined_Flights")]
+        WX[("Meteorología horaria<br/>Open-Meteo<br/>por aeropuerto")]
+    end
+
+    PRE["Preprocesado<br/>limpieza · cancelados/desviados<br/>timestamps salida/llegada"]
+
+    subgraph TRACK["Modelado — GNN espacio-temporal"]
+        direction TB
+        GB["Constructor de grafo<br/>nodos = aeropuertos<br/>aristas = rutas (5 features)"]
+        SNAP["Snapshots temporales<br/>features por nodo (bloques A-H)<br/>invariante de no-fuga"]
+        GNN["GNN multi-horizonte<br/>GAT + LSTM / Transformer<br/>salida [N, H] / [N, H, 3]"]
+        GB --> SNAP --> GNN
+    end
+
+    EVAL["Evaluación<br/>MAE · RMSE · recall/precision/F1<br/>por horizonte"]
+
+    subgraph SERVE["Servicio"]
+        direction LR
+        OL[("OneLake<br/>predictions_latest")]
+        PBI["Power BI<br/>DirectLake"]
+        OL --> PBI
+    end
+
+    RAW --> PRE
+    WX --> PRE
+    PRE --> GB
+    GNN --> EVAL
+    GNN --> OL

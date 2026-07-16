@@ -1,0 +1,25 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'14px'}}}%%
+flowchart TB
+    GNN["GNN espacio-temporal<br/>pronostico (aeropuerto, hora)"]
+    GBM["Modelo per-vuelo (LightGBM)<br/>features point-in-time"]
+
+    BRIDGE["Puente de granularidad (attach_gnn_feature)<br/>para el vuelo F a Dest en hora T:<br/>pronostico GNN mas fresco emitido <= t_pred<br/>(menor horizonte h con h >= lead)"]
+
+    subgraph STRAT["Estrategias de fusion (ajuste en val, reporte en test)"]
+        direction TB
+        S1["gbm_only"]
+        S2["gnn_only"]
+        S3["blend  w*·gbm + (1-w*)·gnn"]
+        S4["switch  mejor por horizonte"]
+        S5["stack  meta-GBM con pronostico GNN<br/>como feature  (GANADOR)"]
+    end
+
+    CONC["Conclusion<br/>stacking: mejor MAE en todo horizonte<br/>GNN aporta en horizontes largos/congestion<br/>donde la rotacion deja de ser observable"]
+
+    GNN --> BRIDGE
+    GBM --> STRAT
+    BRIDGE --> STRAT
+    STRAT --> CONC
+
+    classDef win fill:#1f6feb,stroke:#4c8eda,color:#ffffff;
+    class S5 win;

@@ -1,0 +1,35 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'14px'}}}%%
+flowchart TB
+    SEQ["Secuencia de snapshots [G_t-T+1 ... G_t]"]
+
+    subgraph SP["1 · Codificador espacial (SpatialGATEncoder)"]
+        direction TB
+        PROJ["Proyeccion GATv2Conv<br/>input_dim -> hidden_dim"]
+        RES["Bloques residuales pre-norm x (L-1)<br/>LayerNorm -> GATv2Conv -> GELU -> Dropout<br/>x = x + h  (anti over-smoothing)"]
+        PROJ --> RES
+    end
+
+    STACK["Apilado [N, T, d]"]
+    POS["Positional encoding sinusoidal<br/>sobre el eje temporal T"]
+
+    subgraph TE["2 · Codificador temporal"]
+        TENC["TransformerEncoder pre-norm<br/>x num_temporal_layers<br/>self-attention sobre T"]
+    end
+
+    subgraph DEC["3 · Decoder por horizonte"]
+        direction TB
+        Q["Queries aprendibles<br/>[num_horizons, d]"]
+        XATTN["MultiheadAttention<br/>query=horizontes, key/value=temporal<br/>+ residual + LayerNorm"]
+        Q --> XATTN
+    end
+
+    HEAD["Cabeza MLP por (nodo, horizonte)<br/>Linear -> GELU -> Dropout -> Linear<br/>=> output_channels"]
+    OUT["[N, H]  o  [N, H, 3]<br/>sin autoregresion ni teacher forcing"]
+
+    SEQ --> SP
+    RES --> STACK
+    STACK --> POS
+    POS --> TENC
+    TENC --> XATTN
+    XATTN --> HEAD
+    HEAD --> OUT

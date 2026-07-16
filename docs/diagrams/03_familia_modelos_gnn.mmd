@@ -1,0 +1,28 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'14px'}}}%%
+flowchart LR
+    subgraph BASE["Baselines (referencia)"]
+        direction TB
+        DNN["DenseNN<br/>MLP sobre features tabulares<br/>sin estructura de grafo"]
+        LSTMB["LSTM<br/>secuencia temporal<br/>sin estructura de grafo"]
+    end
+
+    subgraph SPATIAL["GNN espacial (un snapshot)"]
+        direction TB
+        GCN["BasicGCN<br/>GCNConv x N + lineal<br/>peso escalar de arista<br/>salida [N, 1]"]
+        GAT["MultiHorizonGAT<br/>GATv2Conv x N (edge_dim=5)<br/>atencion multi-cabeza<br/>salida [N, H]"]
+    end
+
+    subgraph SPATIOTEMP["GNN espacio-temporal (secuencia de snapshots)"]
+        direction TB
+        STGNN["SpatioTemporalGNN<br/>GAT (compartido) + LSTM<br/>contribucion principal<br/>salida [N, H] / [N, H, 3]"]
+        TRANS["Seq2SeqGNN<br/>GAT pre-norm + Transformer<br/>+ decoder por horizonte<br/>salida [N, H] / [N, H, 3]"]
+    end
+
+    DNN -->|+ grafo| GCN
+    LSTMB -->|+ grafo| GCN
+    GCN -->|+ atencion<br/>+ multi-horizonte| GAT
+    GAT -->|+ dimension temporal| STGNN
+    STGNN -->|+ self-attention<br/>sin autoregresion| TRANS
+
+    classDef main fill:#1f6feb,stroke:#4c8eda,color:#ffffff;
+    class STGNN main;

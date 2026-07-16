@@ -1,0 +1,32 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'14px'}}}%%
+flowchart LR
+    EMB["Representacion por nodo/horizonte<br/>(salida del codificador)"]
+
+    HEAD["Cabeza lineal<br/>-> H x output_channels"]
+
+    subgraph CH["Salida multi-tarea [N, H, 3]"]
+        direction TB
+        C0["Canal 0 · ArrDelay (min)<br/>regresion primaria"]
+        C1["Canal 1 · DepDelay (min)<br/>regresion auxiliar"]
+        C2["Canal 2 · pct_arr_delayed_15<br/>logit de clasificacion"]
+    end
+
+    subgraph LOSS["MultiTaskLoss"]
+        direction TB
+        L0["Huber ponderado<br/>(delay alto x2 + peso horizonte)"]
+        L1["Huber ponderado (auxiliar)"]
+        L2["BCEWithLogits<br/>(pos_weight opcional)"]
+        SUM["total = w_main·L0<br/>+ w_aux·L1 + w_bce·L2"]
+        L0 --> SUM
+        L1 --> SUM
+        L2 --> SUM
+    end
+
+    READ["Lectura en inferencia<br/>arr_delay -> umbral 15/30/45/60<br/>sigmoide(logit) -> pct_arr_delayed_15"]
+
+    EMB --> HEAD --> C0 & C1 & C2
+    C0 --> L0
+    C1 --> L1
+    C2 --> L2
+    C0 --> READ
+    C2 --> READ

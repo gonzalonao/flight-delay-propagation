@@ -1,0 +1,27 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'14px'}}}%%
+flowchart TB
+    RAW[("Vuelos por aeropuerto<br/>top-N · 2018-2019")]
+    CLOCK{{"t_pred = salida_programada - H<br/>solo informacion observable <= t_pred"}}
+
+    subgraph FEATS["Familias de features point-in-time"]
+        direction TB
+        SCH["Schedule / identidad<br/>ruta · distancia · hora · calendario · aerolinea"]
+        ROT["Rotacion de aeronave (mismo Tail_Number)<br/>inbound_delay_estimate · sched_turnaround_min<br/>turnaround_slack · inbound_status"]
+        APT["Estado del aeropuerto<br/>retraso/volumen ultima hora cerrada<br/>antes de t_pred (origen y destino)"]
+        WX["Meteorologia<br/>origen as-of t_pred · destino al llegar (forecast)"]
+    end
+
+    GUARD["assert_no_leakage<br/>(BLOCKED_SELF_COLUMNS:<br/>DepDelay/ArrDelay/... del propio vuelo)"]
+
+    MODEL["FlightDelayModel<br/>LightGBM (early stopping en val)<br/>regresion de ArrDelay (min)"]
+
+    READ["Lectura multi-umbral<br/>recall/precision/F1 a 15/30/45/60 min<br/>(umbral = decision, no reentreno)"]
+
+    OUT["Modelo por horizonte<br/>H = 1, 2, 4, 6, 8"]
+
+    RAW --> CLOCK
+    CLOCK --> SCH & ROT & APT & WX
+    SCH & ROT & APT & WX --> GUARD
+    GUARD --> MODEL
+    MODEL --> READ
+    READ --> OUT

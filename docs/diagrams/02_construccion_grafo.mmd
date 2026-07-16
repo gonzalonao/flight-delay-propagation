@@ -1,0 +1,46 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'16px'}}}%%
+flowchart TB
+    DF[("DataFrame de vuelos preprocesado<br/>(timestamp, arr_timestamp)")]
+
+    subgraph TOPO["Topología del grafo (estática)"]
+        direction TB
+        MAP["build_airport_mapping<br/>IATA → índice de nodo"]
+        EDGE["build_edge_index<br/>aristas bidireccionales · min_flights ≥ 50<br/>3 features estáticas"]
+        MAP --> EDGE
+    end
+
+    LEAK{{"Invariante de no-fuga: las features Class B<br/>solo usan vuelos con arr_timestamp < T"}}
+
+    subgraph WIN["Por cada ventana temporal T"]
+        direction TB
+        NF["compute_node_features_rich<br/>vector por nodo (bloques A-H)"]
+        EA["compute_dynamic_edge_attr<br/>+2 features dinámicas ⇒ edge_attr [E, 5]"]
+        TG["compute_multi_horizon_targets<br/>[N, H, 3] · arr / dep / pct"]
+    end
+
+    subgraph FEAT["Bloques de feature por nodo"]
+        direction TB
+        A["A · Agregados ventana actual (9)"]
+        B["B · Volumen / disrupción (4)"]
+        C["C · Causas BTS (5)"]
+        D["D · Lags ArrDelay 1/3/6/24 (4)"]
+        E["E · Rolling 6h media+std (2)"]
+        F["F · Calendario cíclico (6)"]
+        G["G · Exógenas futuras × horizonte (5·H)"]
+        H["H · Meteorología opcional (9 + 9·H)"]
+        A ~~~ B ~~~ C ~~~ D ~~~ E ~~~ F ~~~ G ~~~ H
+    end
+
+    SEQ["create_temporal_sequences<br/>ventana de input_window grafos"]
+    OUT[("Lista de objetos PyG Data<br/>(un grafo por ventana)")]
+
+    DF --> TOPO
+    DF --> WIN
+    EDGE --> EA
+    LEAK -.controla.-> NF
+    LEAK -.controla.-> EA
+    NF --> FEAT
+    NF --> SEQ
+    EA --> SEQ
+    TG --> SEQ
+    SEQ --> OUT

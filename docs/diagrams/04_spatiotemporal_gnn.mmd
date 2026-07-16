@@ -1,0 +1,26 @@
+%%{init: {'theme':'base','themeVariables':{'background':'#0d1117','primaryColor':'#161b22','primaryTextColor':'#e6edf3','primaryBorderColor':'#8b949e','lineColor':'#4c8eda','secondaryColor':'#21262d','tertiaryColor':'#161b22','clusterBkg':'#1b2027','clusterBorder':'#30363d','fontFamily':'Segoe UI, Helvetica, sans-serif','fontSize':'14px'}}}%%
+flowchart TB
+    SEQ["Secuencia de snapshots<br/>[G_t-T+1, ... , G_t]"]
+
+    subgraph ENC["Codificador espacial compartido (GATEncoder)"]
+        direction LR
+        G1["G_t-T+1"] --> E1["GATv2Conv x L<br/>BatchNorm · ELU · dropout<br/>edge_dim = 5"]
+        G2["..."] --> E2["GATv2Conv x L<br/>(mismos pesos)"]
+        G3["G_t"] --> E3["GATv2Conv x L<br/>(mismos pesos)"]
+    end
+
+    STACK["Apilado por nodo<br/>[N, T, gnn_hidden]"]
+
+    LSTM["LSTM (batch_first)<br/>lee la secuencia por nodo<br/>=> estado final h_n [N, lstm_hidden]"]
+
+    HEAD["Cabeza MLP<br/>Linear -> ReLU -> Dropout -> Linear<br/>lstm_hidden -> H x C"]
+
+    OUT["Prediccion multi-horizonte<br/>[N, H]  (single-task)<br/>o [N, H, 3]  (multi-tarea)"]
+
+    SEQ --> ENC
+    E1 --> STACK
+    E2 --> STACK
+    E3 --> STACK
+    STACK --> LSTM
+    LSTM --> HEAD
+    HEAD --> OUT
