@@ -236,3 +236,7 @@ configs/local.yaml
 
 # Weights & Biases
 wandb/
+
+# Thesis binary assets (kept local; sources are main.tex + images)
+thesis/presentation/
+thesis/*.zip
